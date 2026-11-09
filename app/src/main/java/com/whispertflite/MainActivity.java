@@ -99,6 +99,13 @@ public class MainActivity extends AppCompatActivity {
     private long startTime = 0;
     private TextToSpeech tts;
 
+    private final androidx.activity.result.ActivityResultLauncher<String> pickAudio =
+            registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.GetContent(), uri -> {
+                if (uri != null) {
+                    transcribeFile(uri);
+                }
+            });
+
     @Override
     protected void onDestroy() {
         deinitModel();
@@ -122,6 +129,7 @@ public class MainActivity extends AppCompatActivity {
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
         checkInputMethodEnabled();
         processingBar = findViewById(R.id.processing_bar);
+        findViewById(R.id.btnPickFile).setOnClickListener(v -> pickAudio.launch("audio/*"));
         sp = PreferenceManager.getDefaultSharedPreferences(this);
         append = findViewById(R.id.mode_append);
 
@@ -488,6 +496,43 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // Transcription calls
+
+    private volatile boolean fileJobRunning = false;
+
+    private void transcribeFile(android.net.Uri uri) {
+        if (mWhisper == null || mWhisper.isInProgress() || fileJobRunning) {
+            Toast.makeText(this, getString(R.string.please_wait), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        fileJobRunning = true;
+        if (!append.isChecked()) tvResult.setText("");
+        tvStatus.setText("Decoding audio...");
+        new Thread(() -> {
+            try {
+                byte[] pcm = com.whispertflite.utils.AudioDecoder.decode(this, uri);
+                int chunk = 16000 * 2 * 30;
+                int total = (pcm.length + chunk - 1) / chunk;
+                for (int i = 0; i < total; i++) {
+                    int from = i * chunk;
+                    int to = Math.min(pcm.length, from + chunk);
+                    if (i > 0 && to - from < 32000) break;
+                    com.whispertflite.asr.RecordBuffer.setOutputBuffer(java.util.Arrays.copyOfRange(pcm, from, to));
+                    final int part = i + 1;
+                    runOnUiThread(() -> tvStatus.setText("Part " + part + " of " + total));
+                    startProcessing(translate.isChecked() ? Whisper.ACTION_TRANSLATE : Whisper.ACTION_TRANSCRIBE);
+                    while (mWhisper != null && mWhisper.isInProgress()) Thread.sleep(200);
+                    runOnUiThread(() -> tvResult.append(" "));
+                }
+                runOnUiThread(() -> tvStatus.setText("Finished"));
+            } catch (Exception e) {
+                Log.e(TAG, "File transcription failed", e);
+                runOnUiThread(() -> tvStatus.setText("Failed: " + e.getMessage()));
+            } finally {
+                fileJobRunning = false;
+            }
+        }).start();
+    }
+
     private void startProcessing(Whisper.Action action) {
         if (countDownTimer!=null) { countDownTimer.cancel();}
         runOnUiThread(() -> {
@@ -500,6 +545,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void stopProcessing() {
+        if (fileJobRunning) return;
         processingBar.setIndeterminate(false);
         if (mWhisper != null && mWhisper.isInProgress()) mWhisper.stop();
     }
