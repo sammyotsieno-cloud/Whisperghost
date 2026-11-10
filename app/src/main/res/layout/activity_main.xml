@@ -11,6 +11,13 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/card_background"
+            android:padding="16dp"
+            android:layout_marginBottom="12dp">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
             android:layout_marginBottom="10dp"
             android:orientation="horizontal">
 
@@ -165,6 +172,7 @@
                 android:contentDescription="@string/simple_chinese"/>
 
         </LinearLayout>
+        </LinearLayout>
         <!-- Use ProgressBar as "Space" with same look -->
         <ProgressBar
             android:layout_width="match_parent"
@@ -175,7 +183,10 @@
         <RelativeLayout
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="1">
+            android:layout_weight="1"
+            android:background="@drawable/card_background"
+            android:padding="12dp"
+            android:layout_marginBottom="12dp">
             <ScrollView
                 android:id="@+id/scrollView"
                 android:layout_width="match_parent"
@@ -203,6 +214,45 @@
                 android:contentDescription="@string/copy_to_clipboard"
                 android:src="@drawable/ic_copy" />
         </RelativeLayout>
+        <LinearLayout
+            android:id="@+id/layout_player"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@drawable/card_background"
+            android:padding="8dp"
+            android:layout_marginBottom="12dp"
+            android:visibility="gone">
+            <ImageButton
+                android:id="@+id/btnPlay"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="@null"
+                android:contentDescription="Play or pause"
+                android:src="@drawable/ic_play" />
+            <SeekBar
+                android:id="@+id/seekAudio"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1" />
+            <TextView
+                android:id="@+id/tvTime"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="13sp"
+                android:textColor="@color/textSecondary"
+                android:text="0:00 / 0:00" />
+            <TextView
+                android:id="@+id/btnSpeed"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:padding="12dp"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="@color/colorAccent"
+                android:text="1.0x" />
+        </LinearLayout>
 
         <ProgressBar
             android:id="@+id/processing_bar"

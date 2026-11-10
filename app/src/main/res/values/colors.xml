@@ -3,7 +3,11 @@
     <color name="black">#FF000000</color>
     <color name="lightGrey">#DDDDDD</color>
     <color name="darkGrey">#999999</color>
-    <color name="colorAccent">#996750A4</color>
-    <color name="colorAccentDark">#ff6750A4</color>
-    <color name="windowBackground">#FAFAFA</color>
+    <color name="colorAccent">#FF4F46E5</color>
+    <color name="colorAccentDark">#FF3730A3</color>
+    <color name="windowBackground">#FFF4F6FB</color>
+    <color name="cardBackground">#FFFFFFFF</color>
+    <color name="accentSoft">#FFE0E7FF</color>
+    <color name="textPrimary">#FF1F2937</color>
+    <color name="textSecondary">#FF6B7280</color>
 </resources>

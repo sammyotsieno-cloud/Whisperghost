@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="darkGrey">#555555</color>
-    <color name="colorAccent">#ff6750A4</color>
-    <color name="colorAccentDark">#996750A4</color>
-    <color name="windowBackground">#111111</color>
+    <color name="colorAccent">#FF818CF8</color>
+    <color name="colorAccentDark">#FF6366F1</color>
+    <color name="windowBackground">#FF0F172A</color>
+    <color name="cardBackground">#FF1E293B</color>
+    <color name="accentSoft">#FF312E81</color>
+    <color name="textPrimary">#FFE5E7EB</color>
+    <color name="textSecondary">#FF9CA3AF</color>
 </resources>

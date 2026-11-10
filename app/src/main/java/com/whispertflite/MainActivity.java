@@ -102,12 +102,15 @@ public class MainActivity extends AppCompatActivity {
     private final androidx.activity.result.ActivityResultLauncher<String> pickAudio =
             registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.GetContent(), uri -> {
                 if (uri != null) {
+                    setupPlayer(uri);
                     transcribeFile(uri);
                 }
             });
 
     @Override
     protected void onDestroy() {
+        uiHandler.removeCallbacksAndMessages(null);
+        if (player != null) { player.release(); player = null; }
         deinitModel();
         deinitTTS();
         super.onDestroy();
@@ -115,6 +118,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onPause() {
+        if (player != null && player.isPlaying()) player.pause();
         stopProcessing();
         super.onPause();
     }
@@ -531,6 +535,78 @@ public class MainActivity extends AppCompatActivity {
                 fileJobRunning = false;
             }
         }).start();
+    }
+
+
+    private android.media.MediaPlayer player;
+    private final android.os.Handler uiHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final float[] speeds = {0.75f, 1.0f, 1.25f, 1.5f};
+    private int speedIdx = 1;
+
+    private String fmt(int ms) {
+        int s = ms / 1000;
+        return String.format(Locale.US, "%d:%02d", s / 60, s % 60);
+    }
+
+    private void setupPlayer(android.net.Uri uri) {
+        uiHandler.removeCallbacksAndMessages(null);
+        if (player != null) { player.release(); player = null; }
+        try {
+            player = new android.media.MediaPlayer();
+            player.setDataSource(this, uri);
+            player.prepare();
+        } catch (Exception e) {
+            Log.e(TAG, "Player setup failed", e);
+            player = null;
+            findViewById(R.id.layout_player).setVisibility(View.GONE);
+            return;
+        }
+        findViewById(R.id.layout_player).setVisibility(View.VISIBLE);
+        final ImageButton play = findViewById(R.id.btnPlay);
+        final android.widget.SeekBar seek = findViewById(R.id.seekAudio);
+        final TextView time = findViewById(R.id.tvTime);
+        final TextView speed = findViewById(R.id.btnSpeed);
+        final int dur = player.getDuration();
+        seek.setMax(dur);
+        seek.setProgress(0);
+        play.setImageResource(R.drawable.ic_play);
+        time.setText("0:00 / " + fmt(dur));
+        speedIdx = 1;
+        speed.setText("1.0x");
+        play.setOnClickListener(v -> {
+            if (player == null) return;
+            if (player.isPlaying()) {
+                player.pause();
+            } else {
+                player.setPlaybackParams(player.getPlaybackParams().setSpeed(speeds[speedIdx]));
+                player.start();
+            }
+        });
+        speed.setOnClickListener(v -> {
+            speedIdx = (speedIdx + 1) % speeds.length;
+            speed.setText(speeds[speedIdx] + "x");
+            if (player != null && player.isPlaying())
+                player.setPlaybackParams(player.getPlaybackParams().setSpeed(speeds[speedIdx]));
+        });
+        seek.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(android.widget.SeekBar s, int p, boolean fromUser) {
+                if (fromUser && player != null) player.seekTo(p);
+            }
+            @Override public void onStartTrackingTouch(android.widget.SeekBar s) {}
+            @Override public void onStopTrackingTouch(android.widget.SeekBar s) {}
+        });
+        uiHandler.post(new Runnable() {
+            @Override public void run() {
+                if (player == null) return;
+                try {
+                    int pos = player.getCurrentPosition();
+                    seek.setProgress(pos);
+                    time.setText(fmt(pos) + " / " + fmt(dur));
+                    play.setImageResource(player.isPlaying() ? R.drawable.ic_pause : R.drawable.ic_play);
+                } catch (IllegalStateException ignored) {}
+                uiHandler.postDelayed(this, 300);
+            }
+        });
     }
 
     private void startProcessing(Whisper.Action action) {
