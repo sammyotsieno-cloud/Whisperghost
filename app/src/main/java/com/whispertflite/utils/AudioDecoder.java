@@ -112,4 +112,36 @@ public class AudioDecoder {
             n++;
         }
     }
+
+    // Cut points (byte offsets) that avoid splitting words: each cut sits at the quietest moment in the last 5 s of a 30 s window
+    public static java.util.List<Integer> silenceCuts(byte[] pcm) {
+        final int maxLen = 16000 * 2 * 30;
+        final int search = 16000 * 2 * 5;
+        final int win = 16000 * 2 / 5;
+        final int hop = 16000 * 2 / 20;
+        java.util.ArrayList<Integer> cuts = new java.util.ArrayList<>();
+        cuts.add(0);
+        if (pcm.length < 3200) return cuts;
+        int pos = 0;
+        while (pcm.length - pos > maxLen) {
+            int lo = pos + maxLen - search;
+            int hi = pos + maxLen - win;
+            long best = Long.MAX_VALUE;
+            int bestAt = hi;
+            for (int s = lo; s <= hi; s += hop) {
+                long sum = 0;
+                for (int i = s; i < s + win; i += 8) {
+                    int v = (short) ((pcm[i] & 0xff) | (pcm[i + 1] << 8));
+                    sum += Math.abs(v);
+                }
+                if (sum < best) { best = sum; bestAt = s + win / 2; }
+            }
+            bestAt &= ~1;
+            cuts.add(bestAt);
+            pos = bestAt;
+        }
+        int tail = pcm.length - pos;
+        if (!(tail < 32000 && cuts.size() > 1)) cuts.add(pcm.length);
+        return cuts;
+    }
 }

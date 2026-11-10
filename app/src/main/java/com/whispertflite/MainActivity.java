@@ -134,6 +134,9 @@ public class MainActivity extends AppCompatActivity {
         checkInputMethodEnabled();
         processingBar = findViewById(R.id.processing_bar);
         findViewById(R.id.btnPickFile).setOnClickListener(v -> pickAudio.launch("audio/*"));
+        findViewById(R.id.tvResult).setOnTouchListener(this::onTranscriptTouch);
+        findViewById(R.id.btnShare).setOnClickListener(v -> shareText());
+        findViewById(R.id.btnSaveTxt).setOnClickListener(v -> saveTxtFile());
         sp = PreferenceManager.getDefaultSharedPreferences(this);
         append = findViewById(R.id.mode_append);
 
@@ -510,20 +513,22 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         fileJobRunning = true;
+        partChars.clear();
+        partMs.clear();
         if (!append.isChecked()) tvResult.setText("");
         tvStatus.setText("Decoding audio...");
         new Thread(() -> {
             try {
                 byte[] pcm = com.whispertflite.utils.AudioDecoder.decode(this, uri);
-                int chunk = 16000 * 2 * 30;
-                int total = (pcm.length + chunk - 1) / chunk;
+                java.util.List<Integer> cuts = com.whispertflite.utils.AudioDecoder.silenceCuts(pcm);
+                int total = cuts.size() - 1;
                 for (int i = 0; i < total; i++) {
-                    int from = i * chunk;
-                    int to = Math.min(pcm.length, from + chunk);
-                    if (i > 0 && to - from < 32000) break;
+                    int from = cuts.get(i);
+                    int to = cuts.get(i + 1);
                     com.whispertflite.asr.RecordBuffer.setOutputBuffer(java.util.Arrays.copyOfRange(pcm, from, to));
                     final int part = i + 1;
-                    runOnUiThread(() -> tvStatus.setText("Part " + part + " of " + total));
+                    final int startMs = from / 32;
+                    runOnUiThread(() -> { tvStatus.setText("Part " + part + " of " + total); partChars.add(tvResult.length()); partMs.add(startMs); });
                     startProcessing(translate.isChecked() ? Whisper.ACTION_TRANSLATE : Whisper.ACTION_TRANSCRIBE);
                     while (mWhisper != null && mWhisper.isInProgress()) Thread.sleep(200);
                     runOnUiThread(() -> tvResult.append(" "));
@@ -601,13 +606,66 @@ public class MainActivity extends AppCompatActivity {
                 if (player == null) return;
                 try {
                     int pos = player.getCurrentPosition();
+                    if (loopEndMs > 0 && pos >= loopEndMs && ((android.widget.CheckBox) findViewById(R.id.chk_repeat)).isChecked()) { player.seekTo((int) loopStartMs); pos = (int) loopStartMs; if (!player.isPlaying()) player.start(); }
                     seek.setProgress(pos);
                     time.setText(fmt(pos) + " / " + fmt(dur));
                     play.setImageResource(player.isPlaying() ? R.drawable.ic_pause : R.drawable.ic_play);
                 } catch (IllegalStateException ignored) {}
-                uiHandler.postDelayed(this, 300);
+                uiHandler.postDelayed(this, 100);
             }
         });
+    }
+
+
+    private final java.util.ArrayList<Integer> partChars = new java.util.ArrayList<>();
+    private final java.util.ArrayList<Integer> partMs = new java.util.ArrayList<>();
+    private long loopStartMs = -1;
+    private long loopEndMs = -1;
+
+    private final androidx.activity.result.ActivityResultLauncher<android.content.Intent> saveTxt =
+            registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(), result -> {
+                android.content.Intent data = result.getData();
+                if (result.getResultCode() != RESULT_OK || data == null || data.getData() == null) return;
+                try (java.io.OutputStream os = getContentResolver().openOutputStream(data.getData())) {
+                    os.write(tvResult.getText().toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    Toast.makeText(this, "Saved", Toast.LENGTH_SHORT).show();
+                } catch (Exception ex) {
+                    Toast.makeText(this, "Save failed: " + ex.getMessage(), Toast.LENGTH_LONG).show();
+                }
+            });
+
+    private void saveTxtFile() {
+        android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT);
+        i.addCategory(android.content.Intent.CATEGORY_OPENABLE);
+        i.setType("text/plain");
+        i.putExtra(android.content.Intent.EXTRA_TITLE, "transcript.txt");
+        saveTxt.launch(i);
+    }
+
+    private void shareText() {
+        android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_SEND);
+        i.setType("text/plain");
+        i.putExtra(android.content.Intent.EXTRA_TEXT, tvResult.getText().toString());
+        startActivity(android.content.Intent.createChooser(i, "Share transcript"));
+    }
+
+    private boolean onTranscriptTouch(android.view.View v, android.view.MotionEvent e) {
+        if (e.getAction() != android.view.MotionEvent.ACTION_UP) return false;
+        android.widget.CheckBox jump = findViewById(R.id.chk_tap_jump);
+        if (!jump.isChecked() || player == null || partChars.isEmpty()) return false;
+        int offset = tvResult.getOffsetForPosition(e.getX(), e.getY());
+        int idx = -1;
+        for (int i = 0; i < partChars.size(); i++) if (partChars.get(i) <= offset) idx = i;
+        if (idx < 0) return false;
+        int start = partMs.get(idx);
+        int end = idx + 1 < partMs.size() ? partMs.get(idx + 1) : player.getDuration();
+        android.widget.CheckBox rep = findViewById(R.id.chk_repeat);
+        loopStartMs = rep.isChecked() ? start : -1;
+        loopEndMs = rep.isChecked() ? end : -1;
+        player.seekTo(start);
+        player.setPlaybackParams(player.getPlaybackParams().setSpeed(speeds[speedIdx]));
+        player.start();
+        return false;
     }
 
     private void startProcessing(Whisper.Action action) {
