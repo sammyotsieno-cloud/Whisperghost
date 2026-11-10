@@ -286,6 +286,7 @@ public class MainActivity extends AppCompatActivity {
         });
 
         tvStatus = findViewById(R.id.tvStatus);
+        tvStatus.setText("Build " + BuildConfig.VERSION_NAME);
         tvResult = findViewById(R.id.tvResult);
         tvResult.setOnClickListener(view -> tvResult.setCursorVisible(true));
         getOnBackPressedDispatcher().addCallback(new OnBackPressedCallback(true) {
