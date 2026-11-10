@@ -370,6 +370,7 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onUpdateReceived(String message) {
                 Log.d(TAG, "Update is received, Message: " + message);
+                if (message.contains("not initialized") || message.contains("failed") || message.contains("Failed")) runOnUiThread(() -> Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show());
 
                 if (message.equals(Whisper.MSG_PROCESSING)) {
                     runOnUiThread(() -> tvStatus.setText(getString(R.string.processing)));
@@ -395,7 +396,7 @@ public class MainActivity extends AppCompatActivity {
                 }
                 runOnUiThread(() -> spinnerTflite.setEnabled(true));
                 if (modeTTS.isChecked()){
-                    tts.speak(whisperResult.getResult(), TextToSpeech.QUEUE_FLUSH, null, null);
+                    tts.speak(whisperResult.getResult(), TextToSpeech.QUEUE_ADD, null, null);
                 }
             }
         });
@@ -527,7 +528,7 @@ public class MainActivity extends AppCompatActivity {
                     while (mWhisper != null && mWhisper.isInProgress()) Thread.sleep(200);
                     runOnUiThread(() -> tvResult.append(" "));
                 }
-                runOnUiThread(() -> tvStatus.setText("Finished"));
+                runOnUiThread(() -> tvStatus.setText("Finished: " + tvResult.getText().length() + " characters"));
             } catch (Exception e) {
                 Log.e(TAG, "File transcription failed", e);
                 runOnUiThread(() -> tvStatus.setText("Failed: " + e.getMessage()));
