@@ -27,6 +27,7 @@ target_compile_options(whisper PRIVATE -O3 -fvisibility=hidden -fvisibility-inli
 target_link_options(whisper PRIVATE -Wl,--gc-sections -Wl,--exclude-libs,ALL)
 
 find_library(LOG_LIB log)
+set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+fp16" CACHE STRING "" FORCE)
 include(FetchContent)
 FetchContent_Declare(ggml SOURCE_DIR ${WHISPER_LIB_DIR}/ggml)
 FetchContent_MakeAvailable(ggml)

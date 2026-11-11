@@ -160,6 +160,15 @@
                 android:inputType="text"
                 android:maxLines="1"
                 android:textSize="15sp" />
+            <EditText
+                android:id="@+id/edtThreads"
+                android:layout_width="64dp"
+                android:layout_height="wrap_content"
+                android:hint="threads"
+                android:inputType="number"
+                android:maxLines="1"
+                android:text="4"
+                android:textSize="15sp" />
         </LinearLayout>
         <EditText
             android:id="@+id/edtVocab"
