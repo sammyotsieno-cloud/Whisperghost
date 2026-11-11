@@ -135,6 +135,11 @@ public class MainActivity extends AppCompatActivity {
         checkInputMethodEnabled();
         processingBar = findViewById(R.id.processing_bar);
         findViewById(R.id.btnPickFile).setOnClickListener(v -> pickAudio.launch("audio/*"));
+        findViewById(R.id.btnBench).setOnClickListener(v -> pickBench.launch("audio/*"));
+        findViewById(R.id.btnStop).setOnClickListener(v -> {
+            try { com.whispertflite.cpp.WhisperCpp.requestCancel(); } catch (Throwable ignored) {}
+            Toast.makeText(this, "Stopping...", Toast.LENGTH_SHORT).show();
+        });
         setupCppUi();
         findViewById(R.id.btnSaveSrt).setOnClickListener(v -> saveSrtFile());
         findViewById(R.id.tvResult).setOnTouchListener(this::onTranscriptTouch);
@@ -677,8 +682,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
 
-    private static final String[] CPP_NAMES = {"Small (190 MB) - recommended", "Base (60 MB) - fastest", "Medium (540 MB) - most accurate", "Large v3 turbo (575 MB)", "Small q8 (264 MB)", "Base q8 (80 MB)"};
-    private static final String[] CPP_FILES = {"ggml-small-q5_1.bin", "ggml-base-q5_1.bin", "ggml-medium-q5_0.bin", "ggml-large-v3-turbo-q5_0.bin", "ggml-small-q8_0.bin", "ggml-base-q8_0.bin"};
+    private static final String[] CPP_NAMES = {"Small (190 MB) - recommended", "Base (60 MB) - fastest", "Medium (540 MB) - most accurate", "Large v3 turbo (575 MB)", "Small q8 (264 MB)", "Base q8 (80 MB)", "Base English q5 (60 MB)", "Small English q5 (190 MB)"};
+    private static final String[] CPP_FILES = {"ggml-small-q5_1.bin", "ggml-base-q5_1.bin", "ggml-medium-q5_0.bin", "ggml-large-v3-turbo-q5_0.bin", "ggml-small-q8_0.bin", "ggml-base-q8_0.bin", "ggml-base.en-q5_1.bin", "ggml-small.en-q5_1.bin"};
     private final java.util.ArrayList<Integer> partEndMs = new java.util.ArrayList<>();
     private final java.util.ArrayList<String> partTexts = new java.util.ArrayList<>();
     private String saveKind = "txt";
@@ -949,6 +954,73 @@ public class MainActivity extends AppCompatActivity {
         text.setSpan(hiWord, c, c2, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         text.setSpan(hiWordText, c, c2, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         if (segChanged) scrollToOffset(s);
+    }
+
+
+    private final androidx.activity.result.ActivityResultLauncher<String> pickBench =
+            registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.GetContent(), uri -> {
+                if (uri != null) benchThreads(uri);
+            });
+
+    private void benchThreads(final android.net.Uri uri) {
+        if (fileJobRunning) {
+            Toast.makeText(this, getString(R.string.please_wait), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        fileJobRunning = true;
+        final int modelIdx = ((android.widget.Spinner) findViewById(R.id.spnrCppModel)).getSelectedItemPosition();
+        String l = ((android.widget.EditText) findViewById(R.id.edtLang)).getText().toString().trim();
+        final String lang = l.isEmpty() ? "auto" : l;
+        findViewById(R.id.btnRecord).setEnabled(false);
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        deinitModel();
+        tvStatus.setText("Speed test: preparing...");
+        new Thread(() -> {
+            long ctx = 0;
+            try {
+                java.io.File model = ensureCppModel(CPP_FILES[modelIdx]);
+                runOnUiThread(() -> tvStatus.setText("Speed test: loading model..."));
+                ctx = com.whispertflite.cpp.WhisperCpp.initContext(model.getAbsolutePath());
+                if (ctx == 0) throw new java.io.IOException("Could not load the model (not enough memory?)");
+                byte[] pcm = com.whispertflite.utils.AudioDecoder.decode(this, uri);
+                float[] all = toFloats(pcm);
+                pcm = null;
+                float[] clip = java.util.Arrays.copyOf(all, Math.min(all.length, 16000 * 30));
+                all = null;
+                com.whispertflite.cpp.WhisperCpp.setProgressListener(null);
+                int[] tries = {4, 2, 3, 6};
+                StringBuilder sb = new StringBuilder();
+                int bestThreads = 4;
+                long bestMs = Long.MAX_VALUE;
+                for (int t : tries) {
+                    final int tt = t;
+                    runOnUiThread(() -> tvStatus.setText("Speed test: trying " + tt + " threads..."));
+                    long a = System.currentTimeMillis();
+                    int rc = com.whispertflite.cpp.WhisperCpp.transcribe(ctx, t, clip, lang, false, null);
+                    long ms = System.currentTimeMillis() - a;
+                    sb.append(t).append(" threads: ").append(ms / 1000.0).append(" s\n");
+                    if (rc == 0 && ms < bestMs) { bestMs = ms; bestThreads = t; }
+                }
+                final int best = bestThreads;
+                final String report = "Speed test, first " + (clip.length / 16000) + " s of audio\n" + sb + "Best: " + best + " threads (now set)\n" + com.whispertflite.cpp.WhisperCpp.systemInfo();
+                runOnUiThread(() -> {
+                    ((android.widget.EditText) findViewById(R.id.edtThreads)).setText(String.valueOf(best));
+                    tvStatus.setText(report);
+                });
+            } catch (Throwable e) {
+                Log.e(TAG, "speed test failed", e);
+                final String msg = (e instanceof OutOfMemoryError) ? "Out of memory" : String.valueOf(e.getMessage());
+                runOnUiThread(() -> tvStatus.setText("Speed test failed: " + msg));
+            } finally {
+                if (ctx != 0) com.whispertflite.cpp.WhisperCpp.freeContext(ctx);
+                fileJobRunning = false;
+                runOnUiThread(() -> {
+                    findViewById(R.id.btnRecord).setEnabled(true);
+                    getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                    initModel();
+                });
+            }
+        }).start();
     }
 
     private void startProcessing(Whisper.Action action) {
