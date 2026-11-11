@@ -118,3 +118,9 @@ Java_com_whispertflite_cpp_WhisperCpp_segmentT1(JNIEnv *env, jclass clazz, jlong
     (void) env; (void) clazz;
     return whisper_full_get_segment_t1((struct whisper_context *) ctx, i);
 }
+
+JNIEXPORT jstring JNICALL
+Java_com_whispertflite_cpp_WhisperCpp_systemInfo(JNIEnv *env, jclass clazz) {
+    (void) clazz;
+    return (*env)->NewStringUTF(env, whisper_print_system_info());
+}

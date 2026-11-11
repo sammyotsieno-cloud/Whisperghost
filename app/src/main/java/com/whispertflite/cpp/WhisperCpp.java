@@ -13,6 +13,7 @@ public class WhisperCpp {
     public static native byte[] segmentText(long ctx, int index);
     public static native long segmentT0(long ctx, int index);
     public static native long segmentT1(long ctx, int index);
+    public static native String systemInfo();
 
     public interface ProgressListener {
         void onProgress(int percent);
