@@ -739,6 +739,9 @@ public class MainActivity extends AppCompatActivity {
         final String lang = l.isEmpty() ? "auto" : l;
         final String vocab = ((android.widget.EditText) findViewById(R.id.edtVocab)).getText().toString().trim();
         final boolean tr = translate.isChecked();
+        int tParsed = 4;
+        try { tParsed = Integer.parseInt(((android.widget.EditText) findViewById(R.id.edtThreads)).getText().toString().trim()); } catch (Exception ignored) {}
+        final int thr = Math.max(1, Math.min(8, tParsed));
         if (!append.isChecked()) tvResult.setText("");
         partChars.clear();
         partMs.clear();
@@ -747,6 +750,7 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.btnRecord).setEnabled(false);
         deinitModel();
         tvStatus.setText("Preparing...");
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         new Thread(() -> {
             long ctx = 0;
             try {
@@ -761,7 +765,8 @@ public class MainActivity extends AppCompatActivity {
                 if (audio.length < 1600) throw new java.io.IOException("Audio is empty");
                 final long startedAt = System.currentTimeMillis();
                 runOnUiThread(() -> tvStatus.setText("Transcribing... (this can take a while)"));
-                int threads = Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors()));
+                int threads = thr;
+                com.whispertflite.cpp.WhisperCpp.setProgressListener(p -> runOnUiThread(() -> tvStatus.setText("Transcribing " + p + "% (" + ((System.currentTimeMillis() - startedAt) / 1000) + " s)")));
                 int rc = com.whispertflite.cpp.WhisperCpp.transcribe(ctx, threads, audio, lang, tr, vocab.isEmpty() ? null : vocab);
                 audio = null;
                 if (rc != 0) throw new java.io.IOException("Engine stopped (code " + rc + ")");
@@ -789,6 +794,7 @@ public class MainActivity extends AppCompatActivity {
                 fileJobRunning = false;
                 runOnUiThread(() -> {
                     findViewById(R.id.btnRecord).setEnabled(true);
+                    getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
                     initModel();
                 });
             }

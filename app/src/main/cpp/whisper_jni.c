@@ -11,6 +11,14 @@
 
 static volatile int g_cancel = 0;
 
+struct prog_ctx { JNIEnv *env; jclass clazz; jmethodID mid; };
+
+static void progress_cb(struct whisper_context *ctx, struct whisper_state *state, int progress, void *user_data) {
+    (void) ctx; (void) state;
+    struct prog_ctx *p = (struct prog_ctx *) user_data;
+    if (p && p->mid) (*p->env)->CallStaticVoidMethod(p->env, p->clazz, p->mid, (jint) progress);
+}
+
 static bool abort_cb(void *user_data) {
     (void) user_data;
     return g_cancel != 0;
@@ -64,6 +72,12 @@ Java_com_whispertflite_cpp_WhisperCpp_transcribe(JNIEnv *env, jclass clazz, jlon
     params.abort_callback = abort_cb;
     params.abort_callback_user_data = NULL;
 
+    struct prog_ctx pc;
+    pc.env = env;
+    pc.clazz = clazz;
+    pc.mid = (*env)->GetStaticMethodID(env, clazz, "onProgress", "(I)V");
+    params.progress_callback = progress_cb;
+    params.progress_callback_user_data = &pc;
     g_cancel = 0;
     whisper_reset_timings(ctx);
     LOGI("whisper_full start: %d samples, lang=%s", (int) len, l);
