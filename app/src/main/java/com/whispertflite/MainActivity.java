@@ -631,7 +631,7 @@ public class MainActivity extends AppCompatActivity {
                 android.content.Intent data = result.getData();
                 if (result.getResultCode() != RESULT_OK || data == null || data.getData() == null) return;
                 try (java.io.OutputStream os = getContentResolver().openOutputStream(data.getData())) {
-                    os.write((saveKind.equals("srt") ? buildSrt() : tvResult.getText().toString()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    os.write((this.saveKind.equals("srt") ? buildSrt() : tvResult.getText().toString()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
                     Toast.makeText(this, "Saved", Toast.LENGTH_SHORT).show();
                 } catch (Exception ex) {
                     Toast.makeText(this, "Save failed: " + ex.getMessage(), Toast.LENGTH_LONG).show();
