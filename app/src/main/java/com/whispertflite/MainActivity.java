@@ -288,6 +288,7 @@ public class MainActivity extends AppCompatActivity {
         tvStatus = findViewById(R.id.tvStatus);
         tvStatus.setText("Build " + BuildConfig.VERSION_NAME);
         tvResult = findViewById(R.id.tvResult);
+        setupUi2();
         tvResult.setOnClickListener(view -> tvResult.setCursorVisible(true));
         getOnBackPressedDispatcher().addCallback(new OnBackPressedCallback(true) {
             @Override
@@ -514,7 +515,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         fileJobRunning = true;
-        partChars.clear();
+        partChars.clear(); partMarks.clear(); partEndMs.clear(); clearHighlight(tvResult.getText());
         partMs.clear();
         if (!append.isChecked()) tvResult.setText("");
         tvStatus.setText("Decoding audio...");
@@ -610,7 +611,8 @@ public class MainActivity extends AppCompatActivity {
                     if (loopEndMs > 0 && pos >= loopEndMs && ((android.widget.CheckBox) findViewById(R.id.chk_repeat)).isChecked()) { player.seekTo((int) loopStartMs); pos = (int) loopStartMs; if (!player.isPlaying()) player.start(); }
                     seek.setProgress(pos);
                     time.setText(fmt(pos) + " / " + fmt(dur));
-                    play.setImageResource(player.isPlaying() ? R.drawable.ic_pause : R.drawable.ic_play);
+                    &
+                    try { updateSyncHighlight(pos); } catch (Exception ignored2) {}
                 } catch (IllegalStateException ignored) {}
                 uiHandler.postDelayed(this, 100);
             }
@@ -652,6 +654,7 @@ public class MainActivity extends AppCompatActivity {
 
     private boolean onTranscriptTouch(android.view.View v, android.view.MotionEvent e) {
         if (e.getAction() != android.view.MotionEvent.ACTION_UP) return false;
+        if (editMode) return false;
         android.widget.CheckBox jump = findViewById(R.id.chk_tap_jump);
         if (!jump.isChecked() || player == null || partChars.isEmpty()) return false;
         int offset = tvResult.getOffsetForPosition(e.getX(), e.getY());
@@ -667,6 +670,118 @@ public class MainActivity extends AppCompatActivity {
         player.setPlaybackParams(player.getPlaybackParams().setSpeed(speeds[speedIdx]));
         player.start();
         return false;
+    }
+
+
+    private boolean editMode = false;
+    private final java.util.ArrayList<Object> partMarks = new java.util.ArrayList<>();
+    private final java.util.ArrayList<Integer> partEndMs = new java.util.ArrayList<>();
+    private android.text.style.BackgroundColorSpan hiSeg;
+    private android.text.style.BackgroundColorSpan hiWord;
+    private android.text.style.ForegroundColorSpan hiWordText;
+    private int lastSegShown = -1;
+    private int lastWordShown = -1;
+
+    private void setupUi2() {
+        final TextView toggle = findViewById(R.id.btnToggleSettings);
+        final View card = findViewById(R.id.card_settings);
+        card.setVisibility(View.GONE);
+        toggle.setOnClickListener(v -> {
+            boolean show = card.getVisibility() != View.VISIBLE;
+            card.setVisibility(show ? View.VISIBLE : View.GONE);
+            toggle.setText(show ? "Settings  \u25B2" : "Settings  \u25BC");
+        });
+        final TextView mini = findViewById(R.id.tvStatusMini);
+        mini.setText(tvStatus.getText());
+        tvStatus.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void afterTextChanged(android.text.Editable ed) { mini.setText(ed.toString()); }
+        });
+        tvResult.setShowSoftInputOnFocus(false);
+        final TextView edit = findViewById(R.id.btnEditToggle);
+        edit.setOnClickListener(v -> {
+            android.view.inputmethod.InputMethodManager imm = (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            editMode = !editMode;
+            if (editMode) {
+                tvResult.setShowSoftInputOnFocus(true);
+                tvResult.setCursorVisible(true);
+                tvResult.requestFocus();
+                imm.showSoftInput(tvResult, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+                edit.setText("Done");
+            } else {
+                imm.hideSoftInputFromWindow(tvResult.getWindowToken(), 0);
+                tvResult.setShowSoftInputOnFocus(false);
+                tvResult.setCursorVisible(false);
+                tvResult.clearFocus();
+                edit.setText("Edit");
+            }
+        });
+    }
+
+    private int segStart(int i) {
+        return tvResult.getText().getSpanStart(partMarks.get(i));
+    }
+
+    private void clearHighlight(android.text.Editable text) {
+        if (hiSeg != null) {
+            text.removeSpan(hiSeg);
+            text.removeSpan(hiWord);
+            text.removeSpan(hiWordText);
+        }
+        lastSegShown = -1;
+        lastWordShown = -1;
+    }
+
+    private void scrollToOffset(int offset) {
+        android.text.Layout lo = tvResult.getLayout();
+        android.widget.ScrollView sv = findViewById(R.id.scrollView);
+        if (lo == null || sv == null || offset < 0 || offset > tvResult.length()) return;
+        int line = lo.getLineForOffset(offset);
+        int y = lo.getLineTop(line) + tvResult.getTotalPaddingTop();
+        int h = sv.getHeight();
+        int top = sv.getScrollY();
+        if (y < top || y > top + h - h / 4) {
+            sv.smoothScrollTo(0, Math.max(0, y - h / 4));
+        }
+    }
+
+    private void updateSyncHighlight(int posMs) {
+        if (partMarks.isEmpty() || partMs.size() != partMarks.size() || partEndMs.size() != partMarks.size()) return;
+        android.text.Editable text = tvResult.getText();
+        int idx = -1;
+        for (int i = 0; i < partMs.size(); i++) {
+            if (partMs.get(i) <= posMs && segStart(i) >= 0) idx = i;
+        }
+        if (idx < 0) {
+            clearHighlight(text);
+            return;
+        }
+        int s = segStart(idx);
+        int e = text.getSpanEnd(partMarks.get(idx));
+        if (s < 0 || e <= s) return;
+        int ms0 = partMs.get(idx);
+        int ms1 = Math.max(partEndMs.get(idx), ms0 + 1);
+        float frac = Math.max(0f, Math.min(1f, (posMs - ms0) / (float) (ms1 - ms0)));
+        int c = s + (int) (frac * (e - s));
+        if (c >= e) c = e - 1;
+        while (c > s && text.charAt(c - 1) != ' ') c--;
+        int c2 = c;
+        while (c2 < e && text.charAt(c2) != ' ') c2++;
+        if (c2 <= c) c2 = Math.min(e, c + 1);
+        if (idx == lastSegShown && c == lastWordShown) return;
+        boolean segChanged = idx != lastSegShown;
+        lastSegShown = idx;
+        lastWordShown = c;
+        if (hiSeg == null) {
+            hiSeg = new android.text.style.BackgroundColorSpan(androidx.core.content.ContextCompat.getColor(this, R.color.accentSoft));
+            hiWord = new android.text.style.BackgroundColorSpan(androidx.core.content.ContextCompat.getColor(this, R.color.colorAccentDark));
+            hiWordText = new android.text.style.ForegroundColorSpan(0xFFFFFFFF);
+        }
+        text.setSpan(hiSeg, s, e, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        text.setSpan(hiWord, c, c2, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        text.setSpan(hiWordText, c, c2, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        if (segChanged) scrollToOffset(s);
     }
 
     private void startProcessing(Whisper.Action action) {
