@@ -12,11 +12,11 @@ android {
     }
     
     defaultConfig {
-        applicationId "com.sammyotsieno.whisperghost"
+        applicationId "com.sammyotsieno.whisperghost.cpp"
         minSdk 28
         targetSdk 35
         versionCode 39
-        versionName "3.9-sync"
+        versionName "4.0-cpp"
 
     }
 
