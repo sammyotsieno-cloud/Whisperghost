@@ -125,6 +125,53 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="16sp"
+                android:textColor="@color/colorAccent"
+                android:text="Engine model" />
+            <Spinner
+                android:id="@+id/spnrCppModel"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1" />
+        </LinearLayout>
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="16sp"
+                android:textColor="@color/colorAccent"
+                android:text="Language  " />
+            <EditText
+                android:id="@+id/edtLang"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="auto (or a code: en, sw, fr)"
+                android:inputType="text"
+                android:maxLines="1"
+                android:textSize="15sp" />
+        </LinearLayout>
+        <EditText
+            android:id="@+id/edtVocab"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Names or special terms to expect (optional)"
+            android:inputType="textMultiLine"
+            android:maxLines="3"
+            android:textSize="15sp" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
             android:gravity="start">
             <TextView
                 android:layout_width="wrap_content"
@@ -180,6 +227,14 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="Save TXT" />
+            <Button
+                android:id="@+id/btnSaveSrt"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="8dp"
+                android:text="Save SRT" />
         </LinearLayout>
 
         <LinearLayout

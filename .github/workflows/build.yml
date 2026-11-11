@@ -15,6 +15,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.14.5
+      - name: Fetch whisper.cpp
+        run: git clone --depth 1 --branch v1.9.5 https://github.com/ggml-org/whisper.cpp app/src/main/cpp/whisper.cpp
       - name: Build
         run: |
           rm -f local.properties

@@ -40,12 +40,16 @@ android {
             signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             ndk {
-                abiFilters "arm64-v8a", "armeabi-v7a"
+                abiFilters "arm64-v8a"
             }
         }
     }
 
-    // Removed externalNativeBuild block
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+        }
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11

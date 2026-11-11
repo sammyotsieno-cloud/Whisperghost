@@ -103,12 +103,13 @@ public class MainActivity extends AppCompatActivity {
             registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.GetContent(), uri -> {
                 if (uri != null) {
                     setupPlayer(uri);
-                    transcribeFile(uri);
+                    transcribeFileCpp(uri);
                 }
             });
 
     @Override
     protected void onDestroy() {
+        try { com.whispertflite.cpp.WhisperCpp.requestCancel(); } catch (Throwable ignored) {}
         uiHandler.removeCallbacksAndMessages(null);
         if (player != null) { player.release(); player = null; }
         deinitModel();
@@ -134,6 +135,8 @@ public class MainActivity extends AppCompatActivity {
         checkInputMethodEnabled();
         processingBar = findViewById(R.id.processing_bar);
         findViewById(R.id.btnPickFile).setOnClickListener(v -> pickAudio.launch("audio/*"));
+        setupCppUi();
+        findViewById(R.id.btnSaveSrt).setOnClickListener(v -> saveSrtFile());
         findViewById(R.id.tvResult).setOnTouchListener(this::onTranscriptTouch);
         findViewById(R.id.btnShare).setOnClickListener(v -> shareText());
         findViewById(R.id.btnSaveTxt).setOnClickListener(v -> saveTxtFile());
@@ -628,7 +631,7 @@ public class MainActivity extends AppCompatActivity {
                 android.content.Intent data = result.getData();
                 if (result.getResultCode() != RESULT_OK || data == null || data.getData() == null) return;
                 try (java.io.OutputStream os = getContentResolver().openOutputStream(data.getData())) {
-                    os.write(tvResult.getText().toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    os.write((saveKind.equals("srt") ? buildSrt() : tvResult.getText().toString()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
                     Toast.makeText(this, "Saved", Toast.LENGTH_SHORT).show();
                 } catch (Exception ex) {
                     Toast.makeText(this, "Save failed: " + ex.getMessage(), Toast.LENGTH_LONG).show();
@@ -639,6 +642,7 @@ public class MainActivity extends AppCompatActivity {
         android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT);
         i.addCategory(android.content.Intent.CATEGORY_OPENABLE);
         i.setType("text/plain");
+        saveKind = "txt";
         i.putExtra(android.content.Intent.EXTRA_TITLE, "transcript.txt");
         saveTxt.launch(i);
     }
@@ -667,6 +671,159 @@ public class MainActivity extends AppCompatActivity {
         player.setPlaybackParams(player.getPlaybackParams().setSpeed(speeds[speedIdx]));
         player.start();
         return false;
+    }
+
+
+    private static final String[] CPP_NAMES = {"Small (190 MB) - recommended", "Base (60 MB) - fastest", "Medium (540 MB) - most accurate", "Large v3 turbo (575 MB)"};
+    private static final String[] CPP_FILES = {"ggml-small-q5_1.bin", "ggml-base-q5_1.bin", "ggml-medium-q5_0.bin", "ggml-large-v3-turbo-q5_0.bin"};
+    private final java.util.ArrayList<Integer> partEndMs = new java.util.ArrayList<>();
+    private final java.util.ArrayList<String> partTexts = new java.util.ArrayList<>();
+    private String saveKind = "txt";
+
+    private void setupCppUi() {
+        android.widget.Spinner s = findViewById(R.id.spnrCppModel);
+        android.widget.ArrayAdapter<String> a = new android.widget.ArrayAdapter<>(this, android.R.layout.simple_spinner_item, CPP_NAMES);
+        a.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        s.setAdapter(a);
+    }
+
+    private java.io.File ensureCppModel(String fileName) throws java.io.IOException {
+        java.io.File dir = getExternalFilesDir(null);
+        java.io.File model = new java.io.File(dir, fileName);
+        if (model.exists() && model.length() > 1000000) return model;
+        java.io.File part = new java.io.File(dir, fileName + ".part");
+        java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/" + fileName).openConnection();
+        c.setConnectTimeout(20000);
+        c.setReadTimeout(30000);
+        c.connect();
+        if (c.getResponseCode() != 200) throw new java.io.IOException("Download failed: HTTP " + c.getResponseCode());
+        long total = c.getContentLengthLong();
+        long done = 0;
+        long lastUi = 0;
+        try (java.io.InputStream in = c.getInputStream(); java.io.FileOutputStream out = new java.io.FileOutputStream(part)) {
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+                done += n;
+                long now = System.currentTimeMillis();
+                if (now - lastUi > 500) {
+                    lastUi = now;
+                    final String msg = total > 0 ? (done * 100 / total) + "%" : (done / 1048576) + " MB";
+                    runOnUiThread(() -> tvStatus.setText("Downloading model: " + msg));
+                }
+            }
+        }
+        if (total > 0 && done != total) throw new java.io.IOException("Download incomplete, try again");
+        if (!part.renameTo(model)) throw new java.io.IOException("Could not save the model file");
+        return model;
+    }
+
+    private float[] toFloats(byte[] pcm) {
+        int n = pcm.length / 2;
+        float[] out = new float[n];
+        for (int i = 0; i < n; i++) {
+            out[i] = (short) ((pcm[2 * i] & 0xff) | (pcm[2 * i + 1] << 8)) / 32768f;
+        }
+        return out;
+    }
+
+    private void transcribeFileCpp(android.net.Uri uri) {
+        if (fileJobRunning) {
+            Toast.makeText(this, getString(R.string.please_wait), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        fileJobRunning = true;
+        final int modelIdx = ((android.widget.Spinner) findViewById(R.id.spnrCppModel)).getSelectedItemPosition();
+        String l = ((android.widget.EditText) findViewById(R.id.edtLang)).getText().toString().trim();
+        final String lang = l.isEmpty() ? "auto" : l;
+        final String vocab = ((android.widget.EditText) findViewById(R.id.edtVocab)).getText().toString().trim();
+        final boolean tr = translate.isChecked();
+        if (!append.isChecked()) tvResult.setText("");
+        partChars.clear();
+        partMs.clear();
+        partEndMs.clear();
+        partTexts.clear();
+        findViewById(R.id.btnRecord).setEnabled(false);
+        deinitModel();
+        tvStatus.setText("Preparing...");
+        new Thread(() -> {
+            long ctx = 0;
+            try {
+                java.io.File model = ensureCppModel(CPP_FILES[modelIdx]);
+                runOnUiThread(() -> tvStatus.setText("Loading model..."));
+                ctx = com.whispertflite.cpp.WhisperCpp.initContext(model.getAbsolutePath());
+                if (ctx == 0) throw new java.io.IOException("Could not load the model (not enough memory?)");
+                runOnUiThread(() -> tvStatus.setText("Decoding audio..."));
+                byte[] pcm = com.whispertflite.utils.AudioDecoder.decode(this, uri);
+                float[] audio = toFloats(pcm);
+                pcm = null;
+                if (audio.length < 1600) throw new java.io.IOException("Audio is empty");
+                final long startedAt = System.currentTimeMillis();
+                runOnUiThread(() -> tvStatus.setText("Transcribing... (this can take a while)"));
+                int threads = Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors()));
+                int rc = com.whispertflite.cpp.WhisperCpp.transcribe(ctx, threads, audio, lang, tr, vocab.isEmpty() ? null : vocab);
+                audio = null;
+                if (rc != 0) throw new java.io.IOException("Engine stopped (code " + rc + ")");
+                final int count = com.whispertflite.cpp.WhisperCpp.segmentCount(ctx);
+                for (int i = 0; i < count; i++) {
+                    final String text = new String(com.whispertflite.cpp.WhisperCpp.segmentText(ctx, i), java.nio.charset.StandardCharsets.UTF_8).trim();
+                    final int ms0 = (int) (com.whispertflite.cpp.WhisperCpp.segmentT0(ctx, i) * 10);
+                    final int ms1 = (int) (com.whispertflite.cpp.WhisperCpp.segmentT1(ctx, i) * 10);
+                    runOnUiThread(() -> {
+                        partChars.add(tvResult.length());
+                        partMs.add(ms0);
+                        partEndMs.add(ms1);
+                        partTexts.add(text);
+                        tvResult.append(text + "\n");
+                    });
+                }
+                final long secs = (System.currentTimeMillis() - startedAt) / 1000;
+                runOnUiThread(() -> tvStatus.setText("Finished: " + count + " sentences in " + secs + " s"));
+            } catch (Throwable e) {
+                Log.e(TAG, "cpp transcription failed", e);
+                final String msg = (e instanceof OutOfMemoryError) ? "Out of memory" : String.valueOf(e.getMessage());
+                runOnUiThread(() -> tvStatus.setText("Failed: " + msg));
+            } finally {
+                if (ctx != 0) com.whispertflite.cpp.WhisperCpp.freeContext(ctx);
+                fileJobRunning = false;
+                runOnUiThread(() -> {
+                    findViewById(R.id.btnRecord).setEnabled(true);
+                    initModel();
+                });
+            }
+        }).start();
+    }
+
+    private String srtTime(long ms) {
+        return String.format(Locale.US, "%02d:%02d:%02d,%03d", ms / 3600000, (ms / 60000) % 60, (ms / 1000) % 60, ms % 1000);
+    }
+
+    private String buildSrt() {
+        String[] raw = tvResult.getText().toString().split("\n");
+        java.util.ArrayList<String> lines = new java.util.ArrayList<>();
+        for (String s : raw) if (!s.trim().isEmpty()) lines.add(s.trim());
+        boolean useEdited = lines.size() == partTexts.size();
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < partTexts.size(); i++) {
+            sb.append(i + 1).append("\n");
+            sb.append(srtTime(partMs.get(i))).append(" --> ").append(srtTime(partEndMs.get(i))).append("\n");
+            sb.append(useEdited ? lines.get(i) : partTexts.get(i)).append("\n\n");
+        }
+        return sb.toString();
+    }
+
+    private void saveSrtFile() {
+        if (partTexts.isEmpty()) {
+            Toast.makeText(this, "Transcribe an audio file first", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        saveKind = "srt";
+        android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT);
+        i.addCategory(android.content.Intent.CATEGORY_OPENABLE);
+        i.setType("application/octet-stream");
+        i.putExtra(android.content.Intent.EXTRA_TITLE, "transcript.srt");
+        saveTxt.launch(i);
     }
 
     private void startProcessing(Whisper.Action action) {

@@ -1,3 +1,4 @@
 /.idea/
 /app/build/
 /.gradle/
+app/src/main/cpp/whisper.cpp/
