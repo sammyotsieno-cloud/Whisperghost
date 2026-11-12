@@ -611,7 +611,7 @@ public class MainActivity extends AppCompatActivity {
                     if (loopEndMs > 0 && pos >= loopEndMs && ((android.widget.CheckBox) findViewById(R.id.chk_repeat)).isChecked()) { player.seekTo((int) loopStartMs); pos = (int) loopStartMs; if (!player.isPlaying()) player.start(); }
                     seek.setProgress(pos);
                     time.setText(fmt(pos) + " / " + fmt(dur));
-                    &
+                    play.setImageResource(player.isPlaying() ? R.drawable.ic_pause : R.drawable.ic_play);
                     try { updateSyncHighlight(pos); } catch (Exception ignored2) {}
                 } catch (IllegalStateException ignored) {}
                 uiHandler.postDelayed(this, 100);
