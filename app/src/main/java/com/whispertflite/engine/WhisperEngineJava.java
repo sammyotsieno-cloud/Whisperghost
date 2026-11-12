@@ -34,6 +34,7 @@ public class WhisperEngineJava implements WhisperEngine {
     private final Context mContext;
     private boolean mIsInitialized = false;
     private Interpreter mInterpreter = null;
+    public static volatile int NUM_THREADS = 0;
 
     public WhisperEngineJava(Context context) {
         mContext = context;
@@ -98,7 +99,7 @@ public class WhisperEngineJava implements WhisperEngine {
         // Set the number of threads for inference
         Interpreter.Options options = new Interpreter.Options();
         options.setUseXNNPACK(false);  //cannot be used due to dynamic tensors
-        options.setNumThreads(Runtime.getRuntime().availableProcessors());
+        options.setNumThreads(NUM_THREADS > 0 ? NUM_THREADS : Runtime.getRuntime().availableProcessors());
         options.setCancellable(true);
 
         mInterpreter = new Interpreter(tfliteModel, options);
@@ -113,7 +114,7 @@ public class WhisperEngineJava implements WhisperEngine {
         int copyLength = Math.min(samples.length, fixedInputSize);
         System.arraycopy(samples, 0, inputSamples, 0, copyLength);
 
-        int cores = Runtime.getRuntime().availableProcessors();
+        int cores = NUM_THREADS > 0 ? NUM_THREADS : Runtime.getRuntime().availableProcessors();
         return mWhisperUtil.getMelSpectrogram(inputSamples, inputSamples.length, copyLength, cores);
     }
 

@@ -134,10 +134,12 @@ public class MainActivity extends AppCompatActivity {
         checkInputMethodEnabled();
         processingBar = findViewById(R.id.processing_bar);
         findViewById(R.id.btnPickFile).setOnClickListener(v -> pickAudio.launch("audio/*"));
+        findViewById(R.id.btnApplyThreads).setOnClickListener(v -> applyThreads());
         findViewById(R.id.tvResult).setOnTouchListener(this::onTranscriptTouch);
         findViewById(R.id.btnShare).setOnClickListener(v -> shareText());
         findViewById(R.id.btnSaveTxt).setOnClickListener(v -> saveTxtFile());
         sp = PreferenceManager.getDefaultSharedPreferences(this);
+        loadThreads();
         append = findViewById(R.id.mode_append);
 
         layoutTTS = findViewById(R.id.layout_tts);
@@ -515,6 +517,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         fileJobRunning = true;
+        fileJobStartedAt = System.currentTimeMillis();
         partChars.clear(); partMarks.clear(); partEndMs.clear(); clearHighlight(tvResult.getText());
         partMs.clear();
         if (!append.isChecked()) tvResult.setText("");
@@ -535,7 +538,7 @@ public class MainActivity extends AppCompatActivity {
                     while (mWhisper != null && mWhisper.isInProgress()) Thread.sleep(200);
                     runOnUiThread(() -> tvResult.append(" "));
                 }
-                runOnUiThread(() -> tvStatus.setText("Finished: " + tvResult.getText().length() + " characters"));
+                runOnUiThread(() -> tvStatus.setText("Finished in " + ((System.currentTimeMillis() - fileJobStartedAt) / 1000) + " s, " + tvResult.getText().length() + " characters"));
             } catch (Exception e) {
                 Log.e(TAG, "File transcription failed", e);
                 runOnUiThread(() -> tvStatus.setText("Failed: " + e.getMessage()));
@@ -782,6 +785,30 @@ public class MainActivity extends AppCompatActivity {
         text.setSpan(hiWord, c, c2, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         text.setSpan(hiWordText, c, c2, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         if (segChanged) scrollToOffset(s);
+    }
+
+
+    private long fileJobStartedAt = 0;
+
+    private void loadThreads() {
+        int n = sp.getInt("threads", 0);
+        com.whispertflite.engine.WhisperEngineJava.NUM_THREADS = n;
+        if (n > 0) ((android.widget.EditText) findViewById(R.id.edtThreads)).setText(String.valueOf(n));
+    }
+
+    private void applyThreads() {
+        if (fileJobRunning || (mWhisper != null && mWhisper.isInProgress())) {
+            Toast.makeText(this, getString(R.string.please_wait), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        int n = 0;
+        try { n = Integer.parseInt(((android.widget.EditText) findViewById(R.id.edtThreads)).getText().toString().trim()); } catch (Exception ignored) {}
+        n = Math.max(0, Math.min(8, n));
+        sp.edit().putInt("threads", n).apply();
+        com.whispertflite.engine.WhisperEngineJava.NUM_THREADS = n;
+        deinitModel();
+        initModel();
+        Toast.makeText(this, n == 0 ? "Threads: auto" : "Threads: " + n, Toast.LENGTH_SHORT).show();
     }
 
     private void startProcessing(Whisper.Action action) {
