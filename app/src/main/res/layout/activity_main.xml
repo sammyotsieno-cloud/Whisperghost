@@ -239,6 +239,32 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:gravity="start">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:textSize="16sp"
+                android:textColor="@color/colorAccent"
+                android:text="Timestamps in TXT and DOCX" />
+            <CheckBox
+                android:id="@+id/chk_stamps"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:contentDescription="Timestamps in TXT and DOCX" />
+        </LinearLayout>
+        <Button
+            android:id="@+id/btnCorrections"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Corrections (names, medical terms)" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:orientation="horizontal">
             <Button
@@ -255,7 +281,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="Save TXT" />
+                android:text="Export" />
         </LinearLayout>
 
         <LinearLayout

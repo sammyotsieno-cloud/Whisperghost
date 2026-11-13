@@ -134,10 +134,11 @@ public class MainActivity extends AppCompatActivity {
         checkInputMethodEnabled();
         processingBar = findViewById(R.id.processing_bar);
         findViewById(R.id.btnPickFile).setOnClickListener(v -> pickAudio.launch("audio/*"));
+        findViewById(R.id.btnCorrections).setOnClickListener(v -> correctionsDialog());
         findViewById(R.id.btnApplyThreads).setOnClickListener(v -> applyThreads());
         findViewById(R.id.tvResult).setOnTouchListener(this::onTranscriptTouch);
         findViewById(R.id.btnShare).setOnClickListener(v -> shareText());
-        findViewById(R.id.btnSaveTxt).setOnClickListener(v -> saveTxtFile());
+        findViewById(R.id.btnSaveTxt).setOnClickListener(v -> exportDialog());
         sp = PreferenceManager.getDefaultSharedPreferences(this);
         loadThreads();
         append = findViewById(R.id.mode_append);
@@ -518,7 +519,7 @@ public class MainActivity extends AppCompatActivity {
         }
         fileJobRunning = true;
         fileJobStartedAt = System.currentTimeMillis();
-        partChars.clear(); partMarks.clear(); partEndMs.clear(); clearHighlight(tvResult.getText());
+        partChars.clear(); partMarks.clear(); partEndMs.clear(); partTexts.clear(); clearHighlight(tvResult.getText());
         partMs.clear();
         if (!append.isChecked()) tvResult.setText("");
         tvStatus.setText("Decoding audio...");
@@ -527,16 +528,18 @@ public class MainActivity extends AppCompatActivity {
                 byte[] pcm = com.whispertflite.utils.AudioDecoder.decode(this, uri);
                 java.util.List<Integer> cuts = com.whispertflite.utils.AudioDecoder.silenceCuts(pcm);
                 int total = cuts.size() - 1;
+                final int[] chunkStart = new int[1];
                 for (int i = 0; i < total; i++) {
                     int from = cuts.get(i);
                     int to = cuts.get(i + 1);
                     com.whispertflite.asr.RecordBuffer.setOutputBuffer(java.util.Arrays.copyOfRange(pcm, from, to));
                     final int part = i + 1;
                     final int startMs = from / 32;
-                    runOnUiThread(() -> { tvStatus.setText("Part " + part + " of " + total); partChars.add(tvResult.length()); partMs.add(startMs); });
+                    runOnUiThread(() -> { tvStatus.setText("Part " + part + " of " + total); chunkStart[0] = tvResult.length(); });
                     startProcessing(translate.isChecked() ? Whisper.ACTION_TRANSLATE : Whisper.ACTION_TRANSCRIBE);
                     while (mWhisper != null && mWhisper.isInProgress()) Thread.sleep(200);
-                    runOnUiThread(() -> tvResult.append(" "));
+                    final int[] spn = com.whispertflite.utils.AudioDecoder.speechSpanMs(pcm, from, to);
+                    runOnUiThread(() -> finishChunk(chunkStart[0], spn[0], spn[1]));
                 }
                 runOnUiThread(() -> tvStatus.setText("Finished in " + ((System.currentTimeMillis() - fileJobStartedAt) / 1000) + " s, " + tvResult.getText().length() + " characters"));
             } catch (Exception e) {
@@ -633,7 +636,7 @@ public class MainActivity extends AppCompatActivity {
                 android.content.Intent data = result.getData();
                 if (result.getResultCode() != RESULT_OK || data == null || data.getData() == null) return;
                 try (java.io.OutputStream os = getContentResolver().openOutputStream(data.getData())) {
-                    os.write(tvResult.getText().toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    os.write(this.buildExport(this.saveKind));
                     Toast.makeText(this, "Saved", Toast.LENGTH_SHORT).show();
                 } catch (Exception ex) {
                     Toast.makeText(this, "Save failed: " + ex.getMessage(), Toast.LENGTH_LONG).show();
@@ -659,13 +662,13 @@ public class MainActivity extends AppCompatActivity {
         if (e.getAction() != android.view.MotionEvent.ACTION_UP) return false;
         if (editMode) return false;
         android.widget.CheckBox jump = findViewById(R.id.chk_tap_jump);
-        if (!jump.isChecked() || player == null || partChars.isEmpty()) return false;
+        if (!jump.isChecked() || player == null || partMarks.isEmpty()) return false;
         int offset = tvResult.getOffsetForPosition(e.getX(), e.getY());
         int idx = -1;
-        for (int i = 0; i < partChars.size(); i++) if (partChars.get(i) <= offset) idx = i;
+        for (int i = 0; i < partMarks.size(); i++) if (segStart(i) >= 0 && segStart(i) <= offset) idx = i;
         if (idx < 0) return false;
         int start = partMs.get(idx);
-        int end = idx + 1 < partMs.size() ? partMs.get(idx + 1) : player.getDuration();
+        int end = partEndMs.get(idx);
         android.widget.CheckBox rep = findViewById(R.id.chk_repeat);
         loopStartMs = rep.isChecked() ? start : -1;
         loopEndMs = rep.isChecked() ? end : -1;
@@ -809,6 +812,227 @@ public class MainActivity extends AppCompatActivity {
         deinitModel();
         initModel();
         Toast.makeText(this, n == 0 ? "Threads: auto" : "Threads: " + n, Toast.LENGTH_SHORT).show();
+    }
+
+
+    private static final String XML_HEAD = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>";
+    private final java.util.ArrayList<String> partTexts = new java.util.ArrayList<>();
+    private String saveKind = "txt";
+
+    private java.util.ArrayList<String> splitSentences(String raw) {
+        java.util.ArrayList<String> out = new java.util.ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        int n = raw.length();
+        for (int i = 0; i < n; i++) {
+            char c = raw.charAt(i);
+            cur.append(c);
+            boolean cjk = c == '\u3002' || c == '\uFF01' || c == '\uFF1F';
+            boolean ascii = c == '.' || c == '!' || c == '?';
+            boolean endHere = cjk || (ascii && (i + 1 >= n || Character.isWhitespace(raw.charAt(i + 1))));
+            if (endHere) {
+                String s = cur.toString().trim();
+                if (!s.isEmpty()) out.add(s);
+                cur.setLength(0);
+            }
+        }
+        String rest = cur.toString().trim();
+        if (!rest.isEmpty()) out.add(rest);
+        return out;
+    }
+
+    // Called on the UI thread when one audio section has been transcribed: one sentence per line, with estimated times
+    private void finishChunk(int startChar, int msA, int msB) {
+        android.text.Editable ed = tvResult.getText();
+        if (startChar < 0 || startChar > ed.length()) return;
+        String raw = applyCorrections(ed.subSequence(startChar, ed.length()).toString().trim());
+        if (raw.isEmpty()) return;
+        java.util.ArrayList<String> sents = splitSentences(raw);
+        StringBuilder sb = new StringBuilder();
+        int total = 0;
+        for (String s : sents) {
+            sb.append(s).append("\n");
+            total += s.length();
+        }
+        ed.replace(startChar, ed.length(), sb.toString());
+        if (total == 0) return;
+        int pos = startChar;
+        int acc = 0;
+        for (String s : sents) {
+            int a = msA + (int) ((long) (msB - msA) * acc / total);
+            acc += s.length();
+            int b = msA + (int) ((long) (msB - msA) * acc / total);
+            Object mk = new Object();
+            ed.setSpan(mk, pos, pos + s.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            partMarks.add(mk);
+            partMs.add(a);
+            partEndMs.add(b);
+            partTexts.add(s);
+            pos += s.length() + 1;
+        }
+    }
+
+    private java.util.ArrayList<String[]> ruleList() {
+        java.util.ArrayList<String[]> out = new java.util.ArrayList<>();
+        for (String line : sp.getString("corrections", "").split("\n")) {
+            int eq = line.indexOf('=');
+            if (eq <= 0) continue;
+            String wrong = line.substring(0, eq).trim();
+            String right = line.substring(eq + 1).trim();
+            if (!wrong.isEmpty()) out.add(new String[]{wrong, right});
+        }
+        return out;
+    }
+
+    private java.util.regex.Pattern rulePattern(String wrong) {
+        return java.util.regex.Pattern.compile("(?<![\\p{L}\\p{N}])" + java.util.regex.Pattern.quote(wrong) + "(?![\\p{L}\\p{N}])",
+                java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE);
+    }
+
+    private String matchCase(String found, String right) {
+        if (!right.isEmpty() && !found.isEmpty() && Character.isUpperCase(found.charAt(0)) && Character.isLowerCase(right.charAt(0))) {
+            return Character.toUpperCase(right.charAt(0)) + right.substring(1);
+        }
+        return right;
+    }
+
+    private String applyCorrections(String text) {
+        for (String[] r : ruleList()) {
+            java.util.regex.Matcher m = rulePattern(r[0]).matcher(text);
+            StringBuffer sb = new StringBuffer();
+            while (m.find()) m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(matchCase(m.group(), r[1])));
+            m.appendTail(sb);
+            text = sb.toString();
+        }
+        return text;
+    }
+
+    private int fixCurrentText() {
+        int count = 0;
+        android.text.Editable ed = tvResult.getText();
+        for (String[] r : ruleList()) {
+            java.util.regex.Matcher m = rulePattern(r[0]).matcher(ed.toString());
+            java.util.ArrayList<int[]> hits = new java.util.ArrayList<>();
+            java.util.ArrayList<String> reps = new java.util.ArrayList<>();
+            while (m.find()) {
+                hits.add(new int[]{m.start(), m.end()});
+                reps.add(matchCase(m.group(), r[1]));
+            }
+            for (int i = hits.size() - 1; i >= 0; i--) {
+                ed.replace(hits.get(i)[0], hits.get(i)[1], reps.get(i));
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private void correctionsDialog() {
+        final android.widget.EditText box = new android.widget.EditText(this);
+        box.setHint("One per line:  wrong word = right word");
+        box.setText(sp.getString("corrections", ""));
+        box.setMinLines(6);
+        box.setGravity(android.view.Gravity.TOP);
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Corrections")
+                .setView(box)
+                .setPositiveButton("Save", (d, w) -> sp.edit().putString("corrections", box.getText().toString()).apply())
+                .setNeutralButton("Save and fix text", (d, w) -> {
+                    sp.edit().putString("corrections", box.getText().toString()).apply();
+                    int n = fixCurrentText();
+                    Toast.makeText(this, n + " fixes", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private String stampTime(long ms, char sep) {
+        return String.format(Locale.US, "%02d:%02d:%02d%c%03d", ms / 3600000, (ms / 60000) % 60, (ms / 1000) % 60, sep, ms % 1000);
+    }
+
+    private String shortTime(long ms) {
+        return String.format(Locale.US, "%02d:%02d:%02d", ms / 3600000, (ms / 60000) % 60, (ms / 1000) % 60);
+    }
+
+    private String xmlEsc(String s) {
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
+    private void putZip(java.util.zip.ZipOutputStream z, String name, String content) throws java.io.IOException {
+        z.putNextEntry(new java.util.zip.ZipEntry(name));
+        z.write(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        z.closeEntry();
+    }
+
+    private byte[] buildDocx(java.util.List<String> paras) throws java.io.IOException {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(bos);
+        putZip(zip, "[Content_Types].xml", XML_HEAD + "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>");
+        putZip(zip, "_rels/.rels", XML_HEAD + "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>");
+        StringBuilder body = new StringBuilder(XML_HEAD + "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>");
+        for (String p : paras) body.append("<w:p><w:r><w:t xml:space=\"preserve\">").append(xmlEsc(p)).append("</w:t></w:r></w:p>");
+        body.append("</w:body></w:document>");
+        putZip(zip, "word/document.xml", body.toString());
+        zip.close();
+        return bos.toByteArray();
+    }
+
+    private byte[] buildExport(String kind) throws java.io.IOException {
+        java.util.ArrayList<String> lines = new java.util.ArrayList<>();
+        for (String s : tvResult.getText().toString().split("\n")) if (!s.trim().isEmpty()) lines.add(s.trim());
+        boolean timed = !partTexts.isEmpty();
+        boolean useEdited = timed && lines.size() == partTexts.size();
+        java.util.ArrayList<String> texts = new java.util.ArrayList<>();
+        if (timed) for (int i = 0; i < partTexts.size(); i++) texts.add(useEdited ? lines.get(i) : partTexts.get(i));
+        boolean stamps = ((android.widget.CheckBox) findViewById(R.id.chk_stamps)).isChecked();
+        StringBuilder sb = new StringBuilder();
+        if (kind.equals("srt")) {
+            for (int i = 0; i < texts.size(); i++) {
+                sb.append(i + 1).append("\n").append(stampTime(partMs.get(i), ',')).append(" --> ").append(stampTime(partEndMs.get(i), ',')).append("\n").append(texts.get(i)).append("\n\n");
+            }
+        } else if (kind.equals("vtt")) {
+            sb.append("WEBVTT\n\n");
+            for (int i = 0; i < texts.size(); i++) {
+                sb.append(stampTime(partMs.get(i), '.')).append(" --> ").append(stampTime(partEndMs.get(i), '.')).append("\n").append(texts.get(i)).append("\n\n");
+            }
+        } else if (kind.equals("csv")) {
+            sb.append("start,end,text\n");
+            for (int i = 0; i < texts.size(); i++) {
+                sb.append(stampTime(partMs.get(i), '.')).append(",").append(stampTime(partEndMs.get(i), '.')).append(",\"").append(texts.get(i).replace("\"", "\"\"")).append("\"\n");
+            }
+        } else {
+            java.util.ArrayList<String> out = new java.util.ArrayList<>();
+            if (timed && useEdited) {
+                for (int i = 0; i < texts.size(); i++) out.add((stamps ? "[" + shortTime(partMs.get(i)) + "] " : "") + texts.get(i));
+            } else {
+                out.addAll(lines);
+            }
+            if (kind.equals("docx")) return buildDocx(out);
+            for (String s : out) sb.append(s).append("\n");
+        }
+        return sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private void exportDialog() {
+        final String[] names = {"Text (.txt)", "Word (.docx)", "Subtitles (.srt)", "Subtitles (.vtt)", "Spreadsheet (.csv)"};
+        final String[] kinds = {"txt", "docx", "srt", "vtt", "csv"};
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Export as")
+                .setItems(names, (d, which) -> launchExport(kinds[which]))
+                .show();
+    }
+
+    private void launchExport(String kind) {
+        if ((kind.equals("srt") || kind.equals("vtt") || kind.equals("csv")) && partTexts.isEmpty()) {
+            Toast.makeText(this, "Subtitles and CSV need a transcribed audio file", Toast.LENGTH_LONG).show();
+            return;
+        }
+        saveKind = kind;
+        String mime = kind.equals("docx") ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                : kind.equals("txt") ? "text/plain" : kind.equals("csv") ? "text/csv" : "application/octet-stream";
+        android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT);
+        i.addCategory(android.content.Intent.CATEGORY_OPENABLE);
+        i.setType(mime);
+        i.putExtra(android.content.Intent.EXTRA_TITLE, "transcript." + kind);
+        saveTxt.launch(i);
     }
 
     private void startProcessing(Whisper.Action action) {

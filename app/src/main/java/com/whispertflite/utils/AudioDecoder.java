@@ -144,4 +144,29 @@ public class AudioDecoder {
         if (!(tail < 32000 && cuts.size() > 1)) cuts.add(pcm.length);
         return cuts;
     }
+
+    // Start and end (in ms) of the speech inside pcm[from, to): trims the quiet edges
+    public static int[] speechSpanMs(byte[] pcm, int from, int to) {
+        final int frame = 640;
+        int n = (to - from) / frame;
+        if (n < 3) return new int[]{from / 32, to / 32};
+        int[] en = new int[n];
+        int max = 0;
+        for (int f = 0; f < n; f++) {
+            long sum = 0;
+            int base = from + f * frame;
+            for (int i = base; i < base + frame; i += 8) {
+                sum += Math.abs((short) ((pcm[i] & 0xff) | (pcm[i + 1] << 8)));
+            }
+            en[f] = (int) (sum / (frame / 8));
+            if (en[f] > max) max = en[f];
+        }
+        int thr = Math.max(150, max / 8);
+        int first = 0;
+        while (first < n && en[first] < thr) first++;
+        if (first >= n) return new int[]{from / 32, to / 32};
+        int last = n - 1;
+        while (last > first && en[last] < thr) last--;
+        return new int[]{(from + first * frame) / 32, (from + (last + 1) * frame) / 32};
+    }
 }
