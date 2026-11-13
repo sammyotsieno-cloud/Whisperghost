@@ -36,9 +36,9 @@ public class Downloader {
     static final String modelMultiLingualSmallOLD = "whisper-small.tflite";
     static final String modelMultiLingualSmall = "whisper-small.TOP_WORLD.tflite";
     static final String modelEnglishOnly = "whisper-tiny.en.tflite";
-    static final String modelMultiLingualBaseURL = "https://huggingface.co/DocWolle/whisper_tflite_models/resolve/main/whisper-base.TOP_WORLD.tflite";
-    static final String modelMultiLingualSmallURL = "https://huggingface.co/DocWolle/whisper_tflite_models/resolve/main/whisper-small.TOP_WORLD.tflite";
-    static final String modelEnglishOnlyURL = "https://huggingface.co/DocWolle/whisper_tflite_models/resolve/main/whisper-tiny.en.tflite";
+    static final String modelMultiLingualBaseURL = "https://huggingface.co/Sammykwena/whisper_tflite_models/resolve/main/whisper-base.TOP_WORLD.tflite";
+    static final String modelMultiLingualSmallURL = "https://huggingface.co/Sammykwena/whisper_tflite_models/resolve/main/whisper-small.TOP_WORLD.tflite";
+    static final String modelEnglishOnlyURL = "https://huggingface.co/Sammykwena/whisper_tflite_models/resolve/main/whisper-tiny.en.tflite";
     static final String modelMultiLingualBaseOLDMD5 = "4b4fddfac6a24ffecc4972bc2137ba04";
     static final String modelMultiLingualBaseOLD2MD5 = "82adc0d42761f6d83fecd76d0325bcf5";
     static final String modelMultiLingualBaseMD5 = "9e43f385a916ac4b2e48760ce1fa70fc";
