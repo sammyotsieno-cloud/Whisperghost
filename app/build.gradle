@@ -15,8 +15,8 @@ android {
         applicationId "com.sammyotsieno.whisperghost"
         minSdk 28
         targetSdk 35
-        versionCode 42
-        versionName "4.3-sync"
+        versionCode 43
+        versionName "4.4-learn"
 
     }
 

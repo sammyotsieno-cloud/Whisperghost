@@ -35,6 +35,7 @@ public class WhisperEngineJava implements WhisperEngine {
     private boolean mIsInitialized = false;
     private Interpreter mInterpreter = null;
     public static volatile int NUM_THREADS = 0;
+    public static volatile String lastError = null;
 
     public WhisperEngineJava(Context context) {
         mContext = context;
@@ -119,6 +120,7 @@ public class WhisperEngineJava implements WhisperEngine {
     }
 
     private WhisperResult runInference(float[] inputData, Whisper.Action mAction, int mLangToken) {
+        lastError = null;
         Log.d("Whisper","Signatures "+ Arrays.toString(mInterpreter.getSignatureKeys()));
 
         // Create input tensor
@@ -163,6 +165,8 @@ public class WhisperEngineJava implements WhisperEngine {
         try {
             mInterpreter.runSignature(inputsMap, outputsMap, signature_key);
         } catch (Exception e) {
+            lastError = String.valueOf(e);
+            Log.e(TAG, "runSignature failed", e);
             return new WhisperResult("", "", mAction);
         }
 

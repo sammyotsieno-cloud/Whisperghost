@@ -134,6 +134,7 @@ public class MainActivity extends AppCompatActivity {
         checkInputMethodEnabled();
         processingBar = findViewById(R.id.processing_bar);
         findViewById(R.id.btnPickFile).setOnClickListener(v -> pickAudio.launch("audio/*"));
+        findViewById(R.id.btnLearn).setOnClickListener(v -> learnFromEdits());
         findViewById(R.id.btnCorrections).setOnClickListener(v -> correctionsDialog());
         findViewById(R.id.btnApplyThreads).setOnClickListener(v -> applyThreads());
         findViewById(R.id.tvResult).setOnTouchListener(this::onTranscriptTouch);
@@ -292,6 +293,7 @@ public class MainActivity extends AppCompatActivity {
         tvStatus.setText("Build " + BuildConfig.VERSION_NAME);
         tvResult = findViewById(R.id.tvResult);
         setupUi2();
+        setupSpelling();
         tvResult.setOnClickListener(view -> tvResult.setCursorVisible(true));
         getOnBackPressedDispatcher().addCallback(new OnBackPressedCallback(true) {
             @Override
@@ -529,6 +531,7 @@ public class MainActivity extends AppCompatActivity {
                 java.util.List<Integer> cuts = com.whispertflite.utils.AudioDecoder.silenceCuts(pcm);
                 int total = cuts.size() - 1;
                 final int[] chunkStart = new int[1];
+                final int[] failedParts = new int[1];
                 for (int i = 0; i < total; i++) {
                     int from = cuts.get(i);
                     int to = cuts.get(i + 1);
@@ -538,10 +541,11 @@ public class MainActivity extends AppCompatActivity {
                     runOnUiThread(() -> { tvStatus.setText("Part " + part + " of " + total); chunkStart[0] = tvResult.length(); });
                     startProcessing(translate.isChecked() ? Whisper.ACTION_TRANSLATE : Whisper.ACTION_TRANSCRIBE);
                     while (mWhisper != null && mWhisper.isInProgress()) Thread.sleep(200);
+                    if (com.whispertflite.engine.WhisperEngineJava.lastError != null) failedParts[0]++;
                     final int[] spn = com.whispertflite.utils.AudioDecoder.speechSpanMs(pcm, from, to);
                     runOnUiThread(() -> finishChunk(chunkStart[0], spn[0], spn[1]));
                 }
-                runOnUiThread(() -> tvStatus.setText("Finished in " + ((System.currentTimeMillis() - fileJobStartedAt) / 1000) + " s, " + tvResult.getText().length() + " characters"));
+                runOnUiThread(() -> tvStatus.setText("Finished in " + ((System.currentTimeMillis() - fileJobStartedAt) / 1000) + " s, " + tvResult.getText().length() + " characters" + (failedParts[0] > 0 ? ", " + failedParts[0] + " part(s) failed" : "")));
             } catch (Exception e) {
                 Log.e(TAG, "File transcription failed", e);
                 runOnUiThread(() -> tvStatus.setText("Failed: " + e.getMessage()));
@@ -844,7 +848,7 @@ public class MainActivity extends AppCompatActivity {
     private void finishChunk(int startChar, int msA, int msB) {
         android.text.Editable ed = tvResult.getText();
         if (startChar < 0 || startChar > ed.length()) return;
-        String raw = applyCorrections(ed.subSequence(startChar, ed.length()).toString().trim());
+        String raw = applyCorrections(applySpelling(ed.subSequence(startChar, ed.length()).toString().trim()));
         if (raw.isEmpty()) return;
         java.util.ArrayList<String> sents = splitSentences(raw);
         StringBuilder sb = new StringBuilder();
@@ -1033,6 +1037,155 @@ public class MainActivity extends AppCompatActivity {
         i.setType(mime);
         i.putExtra(android.content.Intent.EXTRA_TITLE, "transcript." + kind);
         saveTxt.launch(i);
+    }
+
+
+    private String applySpelling(String text) {
+        int mode = sp.getInt("spelling", 0);
+        return mode == 0 ? text : com.whispertflite.utils.Spelling.convert(text, mode == 1);
+    }
+
+    private void setupSpelling() {
+        final android.widget.Spinner s = findViewById(R.id.spnrSpelling);
+        android.widget.ArrayAdapter<String> a = new android.widget.ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
+                new String[]{"Leave as transcribed", "British (colour, centre)", "American (color, center)"});
+        a.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        s.setAdapter(a);
+        s.setSelection(sp.getInt("spelling", 0), false);
+        s.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View v, int pos, long id) {
+                if (pos == sp.getInt("spelling", 0)) return;
+                sp.edit().putInt("spelling", pos).apply();
+                if (pos > 0) convertCurrentSpelling(pos == 1);
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+        });
+    }
+
+    private void convertCurrentSpelling(boolean toUk) {
+        android.text.Editable ed = tvResult.getText();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\p{L}+").matcher(ed.toString());
+        java.util.ArrayList<int[]> hits = new java.util.ArrayList<>();
+        java.util.ArrayList<String> reps = new java.util.ArrayList<>();
+        while (m.find()) {
+            String w = m.group();
+            String r = com.whispertflite.utils.Spelling.convertWord(w, toUk);
+            if (!r.equals(w)) {
+                hits.add(new int[]{m.start(), m.end()});
+                reps.add(r);
+            }
+        }
+        for (int i = hits.size() - 1; i >= 0; i--) ed.replace(hits.get(i)[0], hits.get(i)[1], reps.get(i));
+        Toast.makeText(this, hits.size() + " words changed", Toast.LENGTH_SHORT).show();
+    }
+
+    private static String stripTok(String t) {
+        return t.replaceAll("^[^\\p{L}\\p{N}']+|[^\\p{L}\\p{N}']+$", "");
+    }
+
+    private java.util.ArrayList<String> wordTokens(String s) {
+        java.util.ArrayList<String> out = new java.util.ArrayList<>();
+        for (String t : s.split("\\s+")) {
+            String x = stripTok(t);
+            if (!x.isEmpty()) out.add(x);
+        }
+        return out;
+    }
+
+    // Compares the machine text with the text as you corrected it, and offers the changes as automatic rules
+    private void learnFromEdits() {
+        if (partTexts.isEmpty()) {
+            Toast.makeText(this, "Transcribe an audio file first", Toast.LENGTH_LONG).show();
+            return;
+        }
+        java.util.ArrayList<String> a = wordTokens(String.join(" ", partTexts));
+        java.util.ArrayList<String> b = wordTokens(tvResult.getText().toString());
+        final int n = a.size();
+        final int m = b.size();
+        if (m == 0) return;
+        if ((long) n * m > 16000000L) {
+            Toast.makeText(this, "Too long to compare (over about 4000 words). Try a shorter recording.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        int[][] d = new int[n + 1][m + 1];
+        for (int i = 0; i <= n; i++) d[i][0] = i;
+        for (int j = 0; j <= m; j++) d[0][j] = j;
+        for (int i = 1; i <= n; i++) {
+            for (int j = 1; j <= m; j++) {
+                int cost = a.get(i - 1).equalsIgnoreCase(b.get(j - 1)) ? 0 : 1;
+                d[i][j] = Math.min(Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1), d[i - 1][j - 1] + cost);
+            }
+        }
+        final int errors = d[n][m];
+        if (errors == 0) {
+            Toast.makeText(this, "No edits found. Correct the text with Edit first, then tap this again.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        java.util.LinkedHashMap<String, Integer> pairs = new java.util.LinkedHashMap<>();
+        int pi = n;
+        int pj = m;
+        while (pi > 0 || pj > 0) {
+            if (pi > 0 && pj > 0) {
+                boolean same = a.get(pi - 1).equalsIgnoreCase(b.get(pj - 1));
+                if (d[pi][pj] == d[pi - 1][pj - 1] + (same ? 0 : 1)) {
+                    if (!same) {
+                        String key = a.get(pi - 1).toLowerCase(Locale.ROOT) + "\t" + b.get(pj - 1);
+                        pairs.put(key, pairs.containsKey(key) ? pairs.get(key) + 1 : 1);
+                    }
+                    pi--;
+                    pj--;
+                    continue;
+                }
+            }
+            if (pi > 0 && d[pi][pj] == d[pi - 1][pj] + 1) pi--; else pj--;
+        }
+        int pct = Math.max(0, (int) Math.round(100.0 * (m - errors) / m));
+        String hist = sp.getString("acc_log", "");
+        String all = hist.isEmpty() ? String.valueOf(pct) : hist + "," + pct;
+        String[] hh = all.split(",");
+        StringBuilder recent = new StringBuilder();
+        for (int k = Math.max(0, hh.length - 5); k < hh.length; k++) recent.append(recent.length() > 0 ? ", " : "").append(hh[k]).append("%");
+        sp.edit().putString("acc_log", all).apply();
+        final java.util.ArrayList<String[]> sug = new java.util.ArrayList<>();
+        java.util.ArrayList<String> labels = new java.util.ArrayList<>();
+        java.util.ArrayList<Boolean> pre = new java.util.ArrayList<>();
+        for (java.util.Map.Entry<String, Integer> en : pairs.entrySet()) {
+            String[] kv = en.getKey().split("\t");
+            if (kv.length < 2) continue;
+            sug.add(new String[]{kv[0], kv[1]});
+            labels.add(kv[0] + "  \u2192  " + kv[1] + (en.getValue() > 1 ? "   (x" + en.getValue() + ")" : ""));
+            pre.add(en.getValue() > 1);
+            if (sug.size() >= 40) break;
+        }
+        String title = "Accuracy about " + pct + "%  (" + errors + " changes in " + m + " words)\nRecent checks: " + recent;
+        if (sug.isEmpty()) {
+            new androidx.appcompat.app.AlertDialog.Builder(this).setTitle(title)
+                    .setMessage("No single-word replacements to learn from this time.").setPositiveButton("OK", null).show();
+            return;
+        }
+        final boolean[] on = new boolean[sug.size()];
+        for (int k = 0; k < on.length; k++) on[k] = pre.get(k);
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMultiChoiceItems(labels.toArray(new String[0]), on, (dlg, which, isChecked) -> on[which] = isChecked)
+                .setPositiveButton("Add ticked to Corrections", (dlg, w) -> addRules(sug, on))
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private void addRules(java.util.ArrayList<String[]> sug, boolean[] on) {
+        java.util.HashSet<String> have = new java.util.HashSet<>();
+        for (String[] r : ruleList()) have.add(r[0].toLowerCase(Locale.ROOT));
+        StringBuilder sb = new StringBuilder(sp.getString("corrections", ""));
+        int added = 0;
+        for (int k = 0; k < sug.size(); k++) {
+            if (!on[k] || have.contains(sug.get(k)[0])) continue;
+            if (sb.length() > 0 && sb.charAt(sb.length() - 1) != '\n') sb.append("\n");
+            sb.append(sug.get(k)[0]).append(" = ").append(sug.get(k)[1]).append("\n");
+            added++;
+        }
+        sp.edit().putString("corrections", sb.toString()).apply();
+        Toast.makeText(this, added + " rule(s) added to Corrections", Toast.LENGTH_SHORT).show();
     }
 
     private void startProcessing(Whisper.Action action) {
