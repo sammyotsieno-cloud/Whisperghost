@@ -544,7 +544,7 @@ public class MainActivity extends AppCompatActivity {
                     if (com.whispertflite.engine.WhisperEngineJava.lastError != null) failedParts[0]++;
                     final int[] spn = com.whispertflite.utils.AudioDecoder.speechSpanMs(pcm, from, to);
                     final int[] pz = com.whispertflite.utils.AudioDecoder.pauseCentersMs(pcm, from, to);
-                    runOnUiThread(() -> finishChunk(chunkStart[0], spn[0], spn[1], pz));
+                    runOnUiThread(() -> { int before = partMs.size(); finishChunk(chunkStart[0], spn[0], spn[1], pz); joinAcrossBoundary(before); });
                 }
                 runOnUiThread(() -> tvStatus.setText("Chunks [start/total:new text] " + dbgLens + "\nFinished in " + ((System.currentTimeMillis() - fileJobStartedAt) / 1000) + " s, " + tvResult.getText().length() + " characters" + (failedParts[0] > 0 ? ", " + failedParts[0] + " part(s) failed" : "")));
             } catch (Exception e) {
@@ -1214,6 +1214,41 @@ public class MainActivity extends AppCompatActivity {
             partEndMs.set(first + i - 1, best);
             prev = best;
         }
+    }
+
+
+    private String lowerIfCommon(String s) {
+        if (s.isEmpty() || !Character.isUpperCase(s.charAt(0))) return s;
+        String core = s.split("\\s+")[0].replaceAll("[^\\p{L}'].*$", "");
+        if (core.length() < 2 || core.equals("I") || core.startsWith("I'") || core.equals(core.toUpperCase(Locale.ROOT))) return s;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?<=[a-z,;] )" + java.util.regex.Pattern.quote(core) + "\\b").matcher(tvResult.getText().toString());
+        if (m.find()) return s;
+        return Character.toLowerCase(s.charAt(0)) + s.substring(1);
+    }
+
+    // If the previous sentence has no ending punctuation, the model's chunk cut it mid-sentence: continue the same line
+    private void joinAcrossBoundary(int idx) {
+        if (idx <= 0 || idx >= partTexts.size() || idx >= partMarks.size()) return;
+        String prev = partTexts.get(idx - 1);
+        if (prev.isEmpty() || ".?!\u2026\"')]\u3002".indexOf(prev.charAt(prev.length() - 1)) >= 0) return;
+        android.text.Editable ed = tvResult.getText();
+        Object mPrev = partMarks.get(idx - 1);
+        Object mCur = partMarks.get(idx);
+        int ps = ed.getSpanStart(mPrev);
+        int pe = ed.getSpanEnd(mPrev);
+        int cs = ed.getSpanStart(mCur);
+        int ce = ed.getSpanEnd(mCur);
+        if (ps < 0 || pe < 0 || cs < 0 || ce < 0 || cs != pe + 1) return;
+        String cur = lowerIfCommon(partTexts.get(idx));
+        String join = prev.endsWith(",") ? " " : ", ";
+        ed.replace(pe, ce, join + cur);
+        ed.setSpan(mPrev, ps, pe + join.length() + cur.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        partTexts.set(idx - 1, prev + join + cur);
+        partEndMs.set(idx - 1, partEndMs.get(idx));
+        partMarks.remove(idx);
+        partMs.remove(idx);
+        partEndMs.remove(idx);
+        partTexts.remove(idx);
     }
 
     private void startProcessing(Whisper.Action action) {
