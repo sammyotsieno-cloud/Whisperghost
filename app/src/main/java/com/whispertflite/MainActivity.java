@@ -543,7 +543,8 @@ public class MainActivity extends AppCompatActivity {
                     while (mWhisper != null && mWhisper.isInProgress()) Thread.sleep(200);
                     if (com.whispertflite.engine.WhisperEngineJava.lastError != null) failedParts[0]++;
                     final int[] spn = com.whispertflite.utils.AudioDecoder.speechSpanMs(pcm, from, to);
-                    runOnUiThread(() -> finishChunk(chunkStart[0], spn[0], spn[1]));
+                    final int[] pz = com.whispertflite.utils.AudioDecoder.pauseCentersMs(pcm, from, to);
+                    runOnUiThread(() -> finishChunk(chunkStart[0], spn[0], spn[1], pz));
                 }
                 runOnUiThread(() -> tvStatus.setText("Chunks [start/total:new text] " + dbgLens + "\nFinished in " + ((System.currentTimeMillis() - fileJobStartedAt) / 1000) + " s, " + tvResult.getText().length() + " characters" + (failedParts[0] > 0 ? ", " + failedParts[0] + " part(s) failed" : "")));
             } catch (Exception e) {
@@ -845,7 +846,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // Called on the UI thread when one audio section has been transcribed: one sentence per line, with estimated times
-    private void finishChunk(int startChar, int msA, int msB) {
+    private void finishChunk(int startChar, int msA, int msB, int[] pz) {
         android.text.Editable ed = tvResult.getText();
         if (startChar < 0 || startChar > ed.length()) return;
         String raw = applyCorrections(applySpelling(ed.subSequence(startChar, ed.length()).toString().trim()));
@@ -860,6 +861,7 @@ public class MainActivity extends AppCompatActivity {
         }
         ed.replace(startChar, ed.length(), sb.toString());
         if (total == 0) return;
+        final int firstIdx = partMs.size();
         int pos = startChar;
         int acc = 0;
         for (String s : sents) {
@@ -874,6 +876,7 @@ public class MainActivity extends AppCompatActivity {
             partTexts.add(s);
             pos += s.length() + 1;
         }
+        snapBoundaries(firstIdx, partMs.size() - firstIdx, pz, msA, msB);
     }
 
     private java.util.ArrayList<String[]> ruleList() {
@@ -1190,6 +1193,29 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private final StringBuilder dbgLens = new StringBuilder();
+
+    // Moves estimated sentence boundaries to the nearest real pause in the audio (within 2.5 s)
+    private void snapBoundaries(int first, int count, int[] pz, int msA, int msB) {
+        if (count < 2 || pz == null || pz.length == 0) return;
+        int prev = msA;
+        for (int i = 1; i < count; i++) {
+            int t = partMs.get(first + i);
+            int best = t;
+            int bestD = 2500;
+            for (int p : pz) {
+                int d = Math.abs(p - t);
+                if (d < bestD && p > prev + 300 && p < msB - 300) {
+                    bestD = d;
+                    best = p;
+                }
+            }
+            if (best <= prev + 200) best = prev + 200;
+            partMs.set(first + i, best);
+            partEndMs.set(first + i - 1, best);
+            prev = best;
+        }
+    }
+
     private void startProcessing(Whisper.Action action) {
         if (countDownTimer!=null) { countDownTimer.cancel();}
         runOnUiThread(() -> {

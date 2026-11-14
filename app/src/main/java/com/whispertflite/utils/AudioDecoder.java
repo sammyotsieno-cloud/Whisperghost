@@ -169,4 +169,42 @@ public class AudioDecoder {
         while (last > first && en[last] < thr) last--;
         return new int[]{(from + first * frame) / 32, (from + (last + 1) * frame) / 32};
     }
+
+    // Centres (in ms) of quiet gaps of at least 0.3 s inside pcm[from, to), used to snap sentence boundaries to real pauses
+    public static int[] pauseCentersMs(byte[] pcm, int from, int to) {
+        final int frame = 640;
+        int n = (to - from) / frame;
+        if (n < 30) return new int[0];
+        int[] en = new int[n];
+        int max = 0;
+        for (int fr = 0; fr < n; fr++) {
+            long sum = 0;
+            int base = from + fr * frame;
+            for (int i = base; i < base + frame; i += 8) {
+                sum += Math.abs((short) ((pcm[i] & 0xff) | (pcm[i + 1] << 8)));
+            }
+            en[fr] = (int) (sum / (frame / 8));
+            if (en[fr] > max) max = en[fr];
+        }
+        int thr = Math.max(120, max / 12);
+        int first = 0;
+        while (first < n && en[first] < thr) first++;
+        int last = n - 1;
+        while (last > first && en[last] < thr) last--;
+        java.util.ArrayList<Integer> out = new java.util.ArrayList<>();
+        int f = first;
+        while (f <= last) {
+            if (en[f] < thr) {
+                int g = f;
+                while (g <= last && en[g] < thr) g++;
+                if (g - f >= 15) out.add((from + ((f + g) / 2) * frame) / 32);
+                f = g;
+            } else {
+                f++;
+            }
+        }
+        int[] r = new int[out.size()];
+        for (int i = 0; i < r.length; i++) r[i] = out.get(i);
+        return r;
+    }
 }

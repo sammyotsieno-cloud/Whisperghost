@@ -15,8 +15,8 @@ android {
         applicationId "com.sammyotsieno.whisperghost"
         minSdk 28
         targetSdk 35
-        versionCode 44
-        versionName "4.4b-debug"
+        versionCode 45
+        versionName "4.5-snap"
 
     }
 
