@@ -521,7 +521,7 @@ public class MainActivity extends AppCompatActivity {
         }
         fileJobRunning = true;
         fileJobStartedAt = System.currentTimeMillis();
-        partChars.clear(); partMarks.clear(); partEndMs.clear(); partTexts.clear(); clearHighlight(tvResult.getText());
+        partChars.clear(); dbgLens.setLength(0); partMarks.clear(); partEndMs.clear(); partTexts.clear(); clearHighlight(tvResult.getText());
         partMs.clear();
         if (!append.isChecked()) tvResult.setText("");
         tvStatus.setText("Decoding audio...");
@@ -545,7 +545,7 @@ public class MainActivity extends AppCompatActivity {
                     final int[] spn = com.whispertflite.utils.AudioDecoder.speechSpanMs(pcm, from, to);
                     runOnUiThread(() -> finishChunk(chunkStart[0], spn[0], spn[1]));
                 }
-                runOnUiThread(() -> tvStatus.setText("Finished in " + ((System.currentTimeMillis() - fileJobStartedAt) / 1000) + " s, " + tvResult.getText().length() + " characters" + (failedParts[0] > 0 ? ", " + failedParts[0] + " part(s) failed" : "")));
+                runOnUiThread(() -> tvStatus.setText("Chunks [start/total:new text] " + dbgLens + "\nFinished in " + ((System.currentTimeMillis() - fileJobStartedAt) / 1000) + " s, " + tvResult.getText().length() + " characters" + (failedParts[0] > 0 ? ", " + failedParts[0] + " part(s) failed" : "")));
             } catch (Exception e) {
                 Log.e(TAG, "File transcription failed", e);
                 runOnUiThread(() -> tvStatus.setText("Failed: " + e.getMessage()));
@@ -849,6 +849,7 @@ public class MainActivity extends AppCompatActivity {
         android.text.Editable ed = tvResult.getText();
         if (startChar < 0 || startChar > ed.length()) return;
         String raw = applyCorrections(applySpelling(ed.subSequence(startChar, ed.length()).toString().trim()));
+        dbgLens.append("[").append(startChar).append("/").append(ed.length()).append(":").append(raw.length()).append("] ");
         if (raw.isEmpty()) return;
         java.util.ArrayList<String> sents = splitSentences(raw);
         StringBuilder sb = new StringBuilder();
@@ -1188,6 +1189,7 @@ public class MainActivity extends AppCompatActivity {
         Toast.makeText(this, added + " rule(s) added to Corrections", Toast.LENGTH_SHORT).show();
     }
 
+    private final StringBuilder dbgLens = new StringBuilder();
     private void startProcessing(Whisper.Action action) {
         if (countDownTimer!=null) { countDownTimer.cancel();}
         runOnUiThread(() -> {
