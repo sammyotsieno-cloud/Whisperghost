@@ -356,4 +356,72 @@ public class WhisperUtil {
         float[] data;
     }
 
+
+    // Reference-style log-mel (as in OpenAI's code): frames centred with reflected edges, one-sided power, no folding
+    public float[] getMelSpectrogramRef(float[] samples, int nSamples, int meaningfulSamples, int nThreads) {
+        final int fftSize = WHISPER_N_FFT;
+        final int fftStep = WHISPER_HOP_LENGTH;
+        final int pad = fftSize / 2;
+        final int nBins = 1 + fftSize / 2;
+        mel.nMel = WHISPER_N_MEL;
+        mel.nLen = nSamples / fftStep;
+        mel.data = new float[mel.nMel * mel.nLen];
+
+        final int meaningful = Math.min(meaningfulSamples, nSamples);
+        final float[] sig = new float[nSamples + 2 * pad];
+        System.arraycopy(samples, 0, sig, pad, meaningful);
+        for (int i = 0; i < pad; i++) {
+            int src = 1 + i;
+            sig[pad - 1 - i] = src < meaningful ? samples[src] : 0f;
+        }
+        final float[] hann = new float[fftSize];
+        for (int i = 0; i < fftSize; i++) {
+            hann[i] = (float) (0.5 * (1.0 - cos(2.0 * Math.PI * i / fftSize)));
+        }
+
+        List<Thread> workers = new ArrayList<>();
+        for (int iw = 0; iw < nThreads; iw++) {
+            final int ith = iw;
+            Thread t = new Thread(() -> {
+                float[] fftIn = new float[fftSize];
+                float[] fftOut = new float[fftSize * 2];
+                float[] pw = new float[nBins];
+                for (int i = ith; i < mel.nLen; i += nThreads) {
+                    int offset = i * fftStep;
+                    if (offset >= pad + meaningful) {
+                        for (int j = 0; j < mel.nMel; j++) mel.data[j * mel.nLen + i] = -10.0f;
+                        continue;
+                    }
+                    for (int j = 0; j < fftSize; j++) fftIn[j] = hann[j] * sig[offset + j];
+                    fft(fftIn, fftOut);
+                    for (int k = 0; k < nBins; k++) pw[k] = fftOut[2 * k] * fftOut[2 * k] + fftOut[2 * k + 1] * fftOut[2 * k + 1];
+                    for (int j = 0; j < mel.nMel; j++) {
+                        double sum = 0.0;
+                        for (int k = 0; k < nBins; k++) sum += pw[k] * filters.data[j * nBins + k];
+                        if (sum < 1e-10) sum = 1e-10;
+                        mel.data[j * mel.nLen + i] = (float) log10(sum);
+                    }
+                }
+            });
+            workers.add(t);
+            t.start();
+        }
+        for (Thread w : workers) {
+            try {
+                w.join();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        double mmax = -1e20;
+        for (int i = 0; i < mel.nMel * mel.nLen; i++) {
+            if (mel.data[i] > mmax) mmax = mel.data[i];
+        }
+        mmax -= 8.0;
+        for (int i = 0; i < mel.nMel * mel.nLen; i++) {
+            if (mel.data[i] < mmax) mel.data[i] = (float) mmax;
+            mel.data[i] = (float) ((mel.data[i] + 4.0) / 4.0);
+        }
+        return mel.data;
+    }
 }

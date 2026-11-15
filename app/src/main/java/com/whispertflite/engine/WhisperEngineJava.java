@@ -35,6 +35,7 @@ public class WhisperEngineJava implements WhisperEngine {
     private boolean mIsInitialized = false;
     private Interpreter mInterpreter = null;
     public static volatile int NUM_THREADS = 0;
+    public static volatile int FRONTEND = 0;
     public static volatile String lastError = null;
 
     public WhisperEngineJava(Context context) {
@@ -116,7 +117,7 @@ public class WhisperEngineJava implements WhisperEngine {
         System.arraycopy(samples, 0, inputSamples, 0, copyLength);
 
         int cores = NUM_THREADS > 0 ? NUM_THREADS : Runtime.getRuntime().availableProcessors();
-        return mWhisperUtil.getMelSpectrogram(inputSamples, inputSamples.length, copyLength, cores);
+        return FRONTEND == 1 ? mWhisperUtil.getMelSpectrogramRef(inputSamples, inputSamples.length, copyLength, cores) : mWhisperUtil.getMelSpectrogram(inputSamples, inputSamples.length, copyLength, cores);
     }
 
     private WhisperResult runInference(float[] inputData, Whisper.Action mAction, int mLangToken) {

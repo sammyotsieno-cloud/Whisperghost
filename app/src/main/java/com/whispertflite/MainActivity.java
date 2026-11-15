@@ -134,6 +134,7 @@ public class MainActivity extends AppCompatActivity {
         checkInputMethodEnabled();
         processingBar = findViewById(R.id.processing_bar);
         findViewById(R.id.btnPickFile).setOnClickListener(v -> pickAudio.launch("audio/*"));
+        findViewById(R.id.btnTerms).setOnClickListener(v -> termsDialog());
         findViewById(R.id.btnLearn).setOnClickListener(v -> learnFromEdits());
         findViewById(R.id.btnCorrections).setOnClickListener(v -> correctionsDialog());
         findViewById(R.id.btnApplyThreads).setOnClickListener(v -> applyThreads());
@@ -294,6 +295,7 @@ public class MainActivity extends AppCompatActivity {
         tvResult = findViewById(R.id.tvResult);
         setupUi2();
         setupSpelling();
+        setupBench();
         tvResult.setOnClickListener(view -> tvResult.setCursorVisible(true));
         getOnBackPressedDispatcher().addCallback(new OnBackPressedCallback(true) {
             @Override
@@ -520,6 +522,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         fileJobRunning = true;
+        currentAudioKey = audioKey(uri);
         fileJobStartedAt = System.currentTimeMillis();
         partChars.clear(); dbgLens.setLength(0); partMarks.clear(); partEndMs.clear(); partTexts.clear(); clearHighlight(tvResult.getText());
         partMs.clear();
@@ -543,11 +546,12 @@ public class MainActivity extends AppCompatActivity {
                     while (mWhisper != null && mWhisper.isInProgress()) Thread.sleep(200);
                     if (com.whispertflite.engine.WhisperEngineJava.lastError != null) failedParts[0]++;
                     final int[] spn = com.whispertflite.utils.AudioDecoder.speechSpanMs(pcm, from, to);
-                    &
+                    final int[] pz = com.whispertflite.utils.AudioDecoder.pauseCentersMs(pcm, from, to);
                     final int startPause = (from > 0) ? com.whispertflite.utils.AudioDecoder.quietRunMs(pcm, from) : 99999;
                     runOnUiThread(() -> { int before = partMs.size(); finishChunk(chunkStart[0], spn[0], spn[1], pz); joinAcrossBoundary(before, startPause); });
                 }
                 runOnUiThread(() -> tvStatus.setText("Chunks [start/total:new text] " + dbgLens + "\nFinished in " + ((System.currentTimeMillis() - fileJobStartedAt) / 1000) + " s, " + tvResult.getText().length() + " characters" + (failedParts[0] > 0 ? ", " + failedParts[0] + " part(s) failed" : "")));
+                runOnUiThread(() -> scoreAgainstReference(true));
             } catch (Exception e) {
                 Log.e(TAG, "File transcription failed", e);
                 runOnUiThread(() -> tvStatus.setText("Failed: " + e.getMessage()));
@@ -835,6 +839,7 @@ public class MainActivity extends AppCompatActivity {
             boolean cjk = c == '\u3002' || c == '\uFF01' || c == '\uFF1F';
             boolean ascii = c == '.' || c == '!' || c == '?';
             boolean endHere = cjk || (ascii && (i + 1 >= n || Character.isWhitespace(raw.charAt(i + 1))));
+            if (endHere && c == 46 && isAbbrevEnd(cur)) endHere = false;
             if (endHere) {
                 String s = cur.toString().trim();
                 if (!s.isEmpty()) out.add(s);
@@ -905,6 +910,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private String applyCorrections(String text) {
+        text = applyTerms(text);
         text = fixUnits(text);
         for (String[] r : ruleList()) {
             java.util.regex.Matcher m = rulePattern(r[0]).matcher(text);
@@ -1259,6 +1265,251 @@ public class MainActivity extends AppCompatActivity {
     private String fixUnits(String text) {
         String unit = sp.getInt("spelling", 0) == 1 ? "litre" : "liter";
         return text.replaceAll("(?i)((?:blood sugar|blood glucose|glucose|random sugar|RBS|FBS)[^.\\n\\d]{0,25}?\\d+(?:\\.\\d+)?\\s*)mm\\s?hg", "$1millimoles per " + unit);
+    }
+
+
+    private String currentAudioKey = "";
+
+    private String audioKey(android.net.Uri uri) {
+        String name = "audio";
+        long size = 0;
+        try (android.database.Cursor c = getContentResolver().query(uri, null, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                int ni = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                int si = c.getColumnIndex(android.provider.OpenableColumns.SIZE);
+                if (ni >= 0) name = c.getString(ni);
+                if (si >= 0) size = c.getLong(si);
+            }
+        } catch (Exception ignored) {}
+        return name + "|" + size;
+    }
+
+    private void setupBench() {
+        final android.widget.CheckBox cb = findViewById(R.id.chk_frontend);
+        int fe = sp.getInt("frontend", 0);
+        cb.setChecked(fe == 1);
+        com.whispertflite.engine.WhisperEngineJava.FRONTEND = fe;
+        cb.setOnCheckedChangeListener((b, on) -> {
+            int v = on ? 1 : 0;
+            sp.edit().putInt("frontend", v).apply();
+            com.whispertflite.engine.WhisperEngineJava.FRONTEND = v;
+        });
+        findViewById(R.id.btnSaveRef).setOnClickListener(v -> saveReference());
+        findViewById(R.id.btnBenchLog).setOnClickListener(v -> benchDialog());
+    }
+
+    private void saveReference() {
+        if (currentAudioKey.isEmpty() || partTexts.isEmpty()) {
+            Toast.makeText(this, "Transcribe an audio file first", Toast.LENGTH_LONG).show();
+            return;
+        }
+        sp.edit().putString("ref_" + currentAudioKey, tvResult.getText().toString()).apply();
+        Toast.makeText(this, "Saved. Every later run of this recording is scored automatically.", Toast.LENGTH_LONG).show();
+    }
+
+    private int[] wordErrors(String ref, String hyp) {
+        String[] a = ref.toLowerCase(Locale.ROOT).replaceAll("[^\\p{L}\\p{N}']+", " ").trim().split(" ");
+        String[] b = hyp.toLowerCase(Locale.ROOT).replaceAll("[^\\p{L}\\p{N}']+", " ").trim().split(" ");
+        int n = (a.length == 1 && a[0].isEmpty()) ? 0 : a.length;
+        int m = (b.length == 1 && b[0].isEmpty()) ? 0 : b.length;
+        if ((long) n * m > 16000000L) return new int[]{-1, n};
+        int[][] d = new int[n + 1][m + 1];
+        for (int i = 0; i <= n; i++) d[i][0] = i;
+        for (int j = 0; j <= m; j++) d[0][j] = j;
+        for (int i = 1; i <= n; i++) {
+            for (int j = 1; j <= m; j++) {
+                int cost = a[i - 1].equals(b[j - 1]) ? 0 : 1;
+                d[i][j] = Math.min(Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1), d[i - 1][j - 1] + cost);
+            }
+        }
+        return new int[]{d[n][m], n};
+    }
+
+    private void scoreAgainstReference(boolean auto) {
+        String ref = sp.getString("ref_" + currentAudioKey, null);
+        if (ref == null) return;
+        int[] r = wordErrors(ref, tvResult.getText().toString());
+        if (r[0] < 0 || r[1] == 0) return;
+        int pct = Math.max(0, (int) Math.round(100.0 * (r[1] - r[0]) / r[1]));
+        String modelName = String.valueOf(spinnerTflite.getSelectedItem());
+        try {
+            modelName = ((TextView) spinnerTflite.getSelectedView().findViewById(android.R.id.text1)).getText().toString();
+        } catch (Exception ignored) {
+            modelName = modelName.substring(modelName.lastIndexOf('/') + 1).replace(".tflite", "");
+        }
+        String entry = BuildConfig.VERSION_NAME + " | " + modelName + " | audio prep " + (sp.getInt("frontend", 0) == 1 ? "reference" : "original")
+                + " | " + pct + "% (" + r[0] + " errors / " + r[1] + " words) | " + ((System.currentTimeMillis() - fileJobStartedAt) / 1000) + " s";
+        String log = sp.getString("bench_log", "");
+        String[] old = log.isEmpty() ? new String[0] : log.split("\n");
+        StringBuilder sb = new StringBuilder();
+        for (int i = Math.max(0, old.length - 29); i < old.length; i++) sb.append(old[i]).append("\n");
+        sb.append(entry);
+        sp.edit().putString("bench_log", sb.toString()).apply();
+        tvStatus.setText(tvStatus.getText() + "\nScore vs reference: " + pct + "%  (" + r[0] + " errors in " + r[1] + " words)");
+    }
+
+    private void benchDialog() {
+        String log = sp.getString("bench_log", "");
+        String msg;
+        if (log.isEmpty()) {
+            msg = "No scored runs yet.\n\n1. Transcribe a recording.\n2. Correct the text (Edit), or paste the true script.\n3. Tap Save as reference.\n4. Run the same recording again with any settings: each run is scored automatically.";
+        } else {
+            String[] lines = log.split("\n");
+            StringBuilder sb = new StringBuilder();
+            for (int i = lines.length - 1; i >= 0; i--) sb.append(lines[i]).append("\n\n");
+            msg = sb.toString();
+        }
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Scores (newest first)")
+                .setMessage(msg)
+                .setPositiveButton("Close", null)
+                .setNeutralButton("Clear", (dlg, w) -> sp.edit().remove("bench_log").apply())
+                .show();
+    }
+
+
+    private static final java.util.HashSet<String> ABBREV = new java.util.HashSet<>(java.util.Arrays.asList(
+            "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "mt", "vs", "gen", "col", "sgt", "capt", "lt", "cmdr",
+            "rev", "hon", "gov", "sen", "atty", "det", "insp", "supt", "cpl", "maj", "adm"));
+
+    // True when the text so far ends with an abbreviation like "Mr." or an initial like "J." (not a real sentence end)
+    private boolean isAbbrevEnd(CharSequence cur) {
+        int end = cur.length() - 1;
+        int i = end;
+        while (i > 0 && Character.isLetter(cur.charAt(i - 1))) i--;
+        String w = cur.subSequence(i, end).toString();
+        if (w.isEmpty()) return false;
+        if (w.length() == 1 && Character.isUpperCase(w.charAt(0))) return true;
+        return ABBREV.contains(w.toLowerCase(Locale.ROOT));
+    }
+
+    private static String letters(String s) {
+        return s.replaceAll("[^\\p{L}\\p{N}]", "").toLowerCase(Locale.ROOT);
+    }
+
+    private static int editDist(String a, String b, int cap) {
+        int n = a.length();
+        int m = b.length();
+        if (Math.abs(n - m) > cap) return cap + 1;
+        int[] prev = new int[m + 1];
+        int[] cur = new int[m + 1];
+        for (int j = 0; j <= m; j++) prev[j] = j;
+        for (int i = 1; i <= n; i++) {
+            cur[0] = i;
+            int rowMin = cur[0];
+            for (int j = 1; j <= m; j++) {
+                int c = a.charAt(i - 1) == b.charAt(j - 1) ? 0 : 1;
+                cur[j] = Math.min(Math.min(prev[j] + 1, cur[j - 1] + 1), prev[j - 1] + c);
+                if (cur[j] < rowMin) rowMin = cur[j];
+            }
+            if (rowMin > cap) return cap + 1;
+            int[] t = prev;
+            prev = cur;
+            cur = t;
+        }
+        return prev[m];
+    }
+
+    // Finds words that spell close to a listed name or term and says what to replace them with
+    private java.util.ArrayList<Object[]> termEdits(String text) {
+        java.util.ArrayList<Object[]> edits = new java.util.ArrayList<>();
+        java.util.ArrayList<String[]> terms = new java.util.ArrayList<>();
+        for (String line : sp.getString("terms", "").split("\n")) {
+            String t = line.trim();
+            if (t.isEmpty()) continue;
+            String lt = letters(t);
+            if (lt.length() < 5) continue;
+            terms.add(new String[]{t, lt, String.valueOf(t.split("\\s+").length)});
+        }
+        if (terms.isEmpty()) return edits;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("[\\p{L}\\p{N}][\\p{L}\\p{N}'\u2019\\-]*").matcher(text);
+        java.util.ArrayList<int[]> tok = new java.util.ArrayList<>();
+        while (m.find()) tok.add(new int[]{m.start(), m.end()});
+        int i = 0;
+        while (i < tok.size()) {
+            int bestD = 99;
+            int bestLen = 0;
+            String bestRep = null;
+            for (String[] tm : terms) {
+                int k = Integer.parseInt(tm[2]);
+                int len = tm[1].length();
+                int cap = Math.max(1, len / 4);
+                int j = i + k - 1;
+                if (j >= tok.size()) continue;
+                boolean ok = true;
+                for (int q = i; q < j && ok; q++) {
+                    if (!text.substring(tok.get(q)[1], tok.get(q + 1)[0]).matches("[ \\t\\-]+")) ok = false;
+                }
+                if (!ok) continue;
+                String cand = text.substring(tok.get(i)[0], tok.get(j)[1]);
+                if (Character.isUpperCase(tm[0].charAt(0)) && !Character.isUpperCase(cand.charAt(0))) continue;
+                int d = editDist(letters(cand), tm[1], cap);
+                String suffix = "";
+                if (cand.endsWith("'s") || cand.endsWith("\u2019s")) {
+                    int dCore = editDist(letters(cand.substring(0, cand.length() - 2)), tm[1], cap);
+                    if (dCore <= d) {
+                        d = dCore;
+                        suffix = cand.substring(cand.length() - 2);
+                    }
+                }
+                if (d > cap) continue;
+                String lc = letters(cand);
+                if (k == 1 && len <= 6 && (d > 1 || lc.isEmpty() || lc.charAt(0) != tm[1].charAt(0))) continue;
+                String rep = tm[0];
+                if (Character.isLowerCase(rep.charAt(0)) && Character.isUpperCase(cand.charAt(0))) {
+                    rep = Character.toUpperCase(rep.charAt(0)) + rep.substring(1);
+                }
+                rep = rep + suffix;
+                int span = j - i + 1;
+                if (d < bestD || (d == bestD && span > bestLen)) {
+                    bestD = d;
+                    bestLen = span;
+                    bestRep = rep;
+                }
+            }
+            if (bestRep != null) {
+                int j = i + bestLen - 1;
+                String cand = text.substring(tok.get(i)[0], tok.get(j)[1]);
+                if (!cand.equals(bestRep)) edits.add(new Object[]{tok.get(i)[0], tok.get(j)[1], bestRep});
+                i = j + 1;
+            } else {
+                i++;
+            }
+        }
+        return edits;
+    }
+
+    private String applyTerms(String text) {
+        java.util.ArrayList<Object[]> ed = termEdits(text);
+        if (ed.isEmpty()) return text;
+        StringBuilder sb = new StringBuilder(text);
+        for (int i = ed.size() - 1; i >= 0; i--) sb.replace((Integer) ed.get(i)[0], (Integer) ed.get(i)[1], (String) ed.get(i)[2]);
+        return sb.toString();
+    }
+
+    private int fixTermsNow() {
+        android.text.Editable e = tvResult.getText();
+        java.util.ArrayList<Object[]> ed = termEdits(e.toString());
+        for (int i = ed.size() - 1; i >= 0; i--) e.replace((Integer) ed.get(i)[0], (Integer) ed.get(i)[1], (String) ed.get(i)[2]);
+        return ed.size();
+    }
+
+    private void termsDialog() {
+        final android.widget.EditText box = new android.widget.EditText(this);
+        box.setHint("One per line, spelled correctly:\nJulio Ramos\nMaria Reyes\npreeclampsia");
+        box.setText(sp.getString("terms", ""));
+        box.setMinLines(6);
+        box.setGravity(android.view.Gravity.TOP);
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Names and terms")
+                .setView(box)
+                .setPositiveButton("Save", (dlg, w) -> sp.edit().putString("terms", box.getText().toString()).apply())
+                .setNeutralButton("Save and fix text", (dlg, w) -> {
+                    sp.edit().putString("terms", box.getText().toString()).apply();
+                    Toast.makeText(this, fixTermsNow() + " fixes", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private void startProcessing(Whisper.Action action) {

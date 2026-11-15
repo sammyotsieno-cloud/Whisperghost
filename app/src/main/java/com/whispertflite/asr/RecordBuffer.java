@@ -36,7 +36,7 @@ public class RecordBuffer {
         }
 
         // Normalize the samples
-        if (maxAbsValue > 0.0f) {
+        if (maxAbsValue > 0.0f && com.whispertflite.engine.WhisperEngineJava.FRONTEND == 0) {
             for (int i = 0; i < numSamples; i++) {
                 samples[i] /= maxAbsValue;
             }
