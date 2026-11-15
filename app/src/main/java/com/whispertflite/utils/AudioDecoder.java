@@ -207,4 +207,37 @@ public class AudioDecoder {
         for (int i = 0; i < r.length; i++) r[i] = out.get(i);
         return r;
     }
+
+    // Length in ms of the quiet stretch at a cut point (used to tell a sentence end from a comma pause)
+    public static int quietRunMs(byte[] pcm, int cut) {
+        final int frame = 640;
+        int f0 = Math.max(0, (cut - 15 * 32000) / frame);
+        int f1 = Math.min(pcm.length / frame, (cut + 15 * 32000) / frame);
+        int n = f1 - f0;
+        if (n < 10) return 0;
+        int[] en = new int[n];
+        int max = 0;
+        for (int k = 0; k < n; k++) {
+            long sum = 0;
+            int base = (f0 + k) * frame;
+            for (int i = base; i < base + frame; i += 8) {
+                sum += Math.abs((short) ((pcm[i] & 0xff) | (pcm[i + 1] << 8)));
+            }
+            en[k] = (int) (sum / (frame / 8));
+            if (en[k] > max) max = en[k];
+        }
+        int thr = Math.max(120, max / 12);
+        int c = Math.min(n - 1, Math.max(0, cut / frame - f0));
+        int start = -1;
+        for (int d = 0; d <= 4 && start < 0; d++) {
+            if (c - d >= 0 && en[c - d] < thr) start = c - d;
+            else if (c + d < n && en[c + d] < thr) start = c + d;
+        }
+        if (start < 0) return 0;
+        int l = start;
+        int r = start;
+        while (l > 0 && en[l - 1] < thr) l--;
+        while (r < n - 1 && en[r + 1] < thr) r++;
+        return (r - l + 1) * 20;
+    }
 }

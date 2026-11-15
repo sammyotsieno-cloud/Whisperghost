@@ -15,8 +15,8 @@ android {
         applicationId "com.sammyotsieno.whisperghost"
         minSdk 28
         targetSdk 35
-        versionCode 46
-        versionName "4.6-join"
+        versionCode 47
+        versionName "4.7-fix"
 
     }
 

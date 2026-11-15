@@ -543,8 +543,9 @@ public class MainActivity extends AppCompatActivity {
                     while (mWhisper != null && mWhisper.isInProgress()) Thread.sleep(200);
                     if (com.whispertflite.engine.WhisperEngineJava.lastError != null) failedParts[0]++;
                     final int[] spn = com.whispertflite.utils.AudioDecoder.speechSpanMs(pcm, from, to);
-                    final int[] pz = com.whispertflite.utils.AudioDecoder.pauseCentersMs(pcm, from, to);
-                    runOnUiThread(() -> { int before = partMs.size(); finishChunk(chunkStart[0], spn[0], spn[1], pz); joinAcrossBoundary(before); });
+                    &
+                    final int startPause = (from > 0) ? com.whispertflite.utils.AudioDecoder.quietRunMs(pcm, from) : 99999;
+                    runOnUiThread(() -> { int before = partMs.size(); finishChunk(chunkStart[0], spn[0], spn[1], pz); joinAcrossBoundary(before, startPause); });
                 }
                 runOnUiThread(() -> tvStatus.setText("Chunks [start/total:new text] " + dbgLens + "\nFinished in " + ((System.currentTimeMillis() - fileJobStartedAt) / 1000) + " s, " + tvResult.getText().length() + " characters" + (failedParts[0] > 0 ? ", " + failedParts[0] + " part(s) failed" : "")));
             } catch (Exception e) {
@@ -904,6 +905,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private String applyCorrections(String text) {
+        text = fixUnits(text);
         for (String[] r : ruleList()) {
             java.util.regex.Matcher m = rulePattern(r[0]).matcher(text);
             StringBuffer sb = new StringBuffer();
@@ -1227,7 +1229,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // If the previous sentence has no ending punctuation, the model's chunk cut it mid-sentence: continue the same line
-    private void joinAcrossBoundary(int idx) {
+    private void joinAcrossBoundary(int idx, int pauseMs) {
+        if (pauseMs >= 350) return;
         if (idx <= 0 || idx >= partTexts.size() || idx >= partMarks.size()) return;
         String prev = partTexts.get(idx - 1);
         if (prev.isEmpty() || ".?!\u2026\"')]\u3002".indexOf(prev.charAt(prev.length() - 1)) >= 0) return;
@@ -1249,6 +1252,13 @@ public class MainActivity extends AppCompatActivity {
         partMs.remove(idx);
         partEndMs.remove(idx);
         partTexts.remove(idx);
+    }
+
+
+    // Blood sugar values are never in mmHg: fix the unit the model sometimes borrows from the blood pressure
+    private String fixUnits(String text) {
+        String unit = sp.getInt("spelling", 0) == 1 ? "litre" : "liter";
+        return text.replaceAll("(?i)((?:blood sugar|blood glucose|glucose|random sugar|RBS|FBS)[^.\\n\\d]{0,25}?\\d+(?:\\.\\d+)?\\s*)mm\\s?hg", "$1millimoles per " + unit);
     }
 
     private void startProcessing(Whisper.Action action) {
