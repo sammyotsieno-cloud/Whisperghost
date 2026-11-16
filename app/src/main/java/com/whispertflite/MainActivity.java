@@ -109,6 +109,8 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        stopReading();
+        if (voice != null) { voice.shutdown(); voice = null; }
         uiHandler.removeCallbacksAndMessages(null);
         if (player != null) { player.release(); player = null; }
         deinitModel();
@@ -118,6 +120,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onPause() {
+        stopReading();
         if (player != null && player.isPlaying()) player.pause();
         stopProcessing();
         super.onPause();
@@ -296,6 +299,7 @@ public class MainActivity extends AppCompatActivity {
         setupUi2();
         setupSpelling();
         setupBench();
+        setupVoice();
         tvResult.setOnClickListener(view -> tvResult.setCursorVisible(true));
         getOnBackPressedDispatcher().addCallback(new OnBackPressedCallback(true) {
             @Override
@@ -408,7 +412,7 @@ public class MainActivity extends AppCompatActivity {
                 }
                 runOnUiThread(() -> spinnerTflite.setEnabled(true));
                 if (modeTTS.isChecked()){
-                    tts.speak(whisperResult.getResult(), TextToSpeech.QUEUE_ADD, null, null);
+                    /* spoken by readAloudNew instead */
                 }
             }
         });
@@ -548,7 +552,7 @@ public class MainActivity extends AppCompatActivity {
                     final int[] spn = com.whispertflite.utils.AudioDecoder.speechSpanMs(pcm, from, to);
                     final int[] pz = com.whispertflite.utils.AudioDecoder.pauseCentersMs(pcm, from, to);
                     final int startPause = (from > 0) ? com.whispertflite.utils.AudioDecoder.quietRunMs(pcm, from) : 99999;
-                    runOnUiThread(() -> { int before = partMs.size(); finishChunk(chunkStart[0], spn[0], spn[1], pz); joinAcrossBoundary(before, startPause); });
+                    runOnUiThread(() -> { int before = partMs.size(); finishChunk(chunkStart[0], spn[0], spn[1], pz); readAloudNew(before); joinAcrossBoundary(before, startPause); });
                 }
                 runOnUiThread(() -> tvStatus.setText("Chunks [start/total:new text] " + dbgLens + "\nFinished in " + ((System.currentTimeMillis() - fileJobStartedAt) / 1000) + " s, " + tvResult.getText().length() + " characters" + (failedParts[0] > 0 ? ", " + failedParts[0] + " part(s) failed" : "")));
                 runOnUiThread(() -> scoreAgainstReference(true));
@@ -598,6 +602,7 @@ public class MainActivity extends AppCompatActivity {
         speedIdx = 1;
         speed.setText("1.0x");
         play.setOnClickListener(v -> {
+            if (voiceMode == 1) { toggleReading(); return; }
             if (player == null) return;
             if (player.isPlaying()) {
                 player.pause();
@@ -627,8 +632,8 @@ public class MainActivity extends AppCompatActivity {
                     if (loopEndMs > 0 && pos >= loopEndMs && ((android.widget.CheckBox) findViewById(R.id.chk_repeat)).isChecked()) { player.seekTo((int) loopStartMs); pos = (int) loopStartMs; if (!player.isPlaying()) player.start(); }
                     seek.setProgress(pos);
                     time.setText(fmt(pos) + " / " + fmt(dur));
-                    play.setImageResource(player.isPlaying() ? R.drawable.ic_pause : R.drawable.ic_play);
-                    try { updateSyncHighlight(pos); } catch (Exception ignored2) {}
+                    play.setImageResource((voiceMode == 1 ? reading : player.isPlaying()) ? R.drawable.ic_pause : R.drawable.ic_play);
+                    if (voiceMode == 0) try { updateSyncHighlight(pos); } catch (Exception ignored2) {}
                 } catch (IllegalStateException ignored) {}
                 uiHandler.postDelayed(this, 100);
             }
@@ -679,10 +684,12 @@ public class MainActivity extends AppCompatActivity {
         if (idx < 0) return false;
         int start = partMs.get(idx);
         int end = partEndMs.get(idx);
+        int at = wordStartMs(idx, offset, start, end);
+        if (voiceMode == 1) { readFrom(offset); return false; }
         android.widget.CheckBox rep = findViewById(R.id.chk_repeat);
-        loopStartMs = rep.isChecked() ? start : -1;
+        loopStartMs = rep.isChecked() ? at : -1;
         loopEndMs = rep.isChecked() ? end : -1;
-        player.seekTo(start);
+        player.seekTo(at);
         player.setPlaybackParams(player.getPlaybackParams().setSpeed(speeds[speedIdx]));
         player.start();
         return false;
@@ -1510,6 +1517,198 @@ public class MainActivity extends AppCompatActivity {
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+
+    private android.speech.tts.TextToSpeech voice;
+    private boolean voiceReady = false;
+    private Runnable voicePending = null;
+    private int voiceMode = 0;
+    private boolean reading = false;
+    private int resumeChar = -1;
+    private String readLastId = "";
+
+    // Speaker heading, written exactly as specified: Speaker 1 [00:00 -->01:02]
+    private String mmss(long ms) {
+        long s = ms / 1000;
+        if (s >= 3600) return String.format(Locale.US, "%02d:%02d:%02d", s / 3600, (s / 60) % 60, s % 60);
+        return String.format(Locale.US, "%02d:%02d", s / 60, s % 60);
+    }
+
+    private String turnHeading(int speaker, long startMs, long endMs) {
+        return "Speaker " + speaker + " [" + mmss(startMs) + " -->" + mmss(endMs) + "]";
+    }
+
+    private void setupVoice() {
+        final android.widget.CheckBox cb = findViewById(R.id.chk_readaloud);
+        cb.setChecked(sp.getBoolean("readAloud", false));
+        cb.setOnCheckedChangeListener((b, on) -> sp.edit().putBoolean("readAloud", on).apply());
+        final android.widget.Spinner s = findViewById(R.id.spnrVoiceSource);
+        android.widget.ArrayAdapter<String> a = new android.widget.ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
+                new String[]{"Original recording", "Computer voice"});
+        a.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        s.setAdapter(a);
+        voiceMode = sp.getInt("voiceMode", 0);
+        s.setSelection(voiceMode, false);
+        s.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View v, int pos, long id) {
+                if (pos == voiceMode) return;
+                if (player != null && player.isPlaying()) player.pause();
+                stopReading();
+                voiceMode = pos;
+                sp.edit().putInt("voiceMode", pos).apply();
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+        });
+    }
+
+    private void applyVoiceLocale() {
+        int r = voice.setLanguage(sp.getInt("spelling", 0) == 1 ? Locale.UK : Locale.US);
+        if (r == android.speech.tts.TextToSpeech.LANG_MISSING_DATA || r == android.speech.tts.TextToSpeech.LANG_NOT_SUPPORTED) {
+            voice.setLanguage(Locale.getDefault());
+        }
+    }
+
+    private void ensureVoice(final Runnable then) {
+        if (voice != null && voiceReady) {
+            then.run();
+            return;
+        }
+        voicePending = then;
+        if (voice != null) return;
+        voice = new android.speech.tts.TextToSpeech(getApplicationContext(), status -> {
+            if (status != android.speech.tts.TextToSpeech.SUCCESS) {
+                voice = null;
+                voicePending = null;
+                runOnUiThread(() -> Toast.makeText(this, "The computer voice isn't available on this phone", Toast.LENGTH_LONG).show());
+                return;
+            }
+            voiceReady = true;
+            voice.setOnUtteranceProgressListener(new android.speech.tts.UtteranceProgressListener() {
+                @Override public void onStart(String id) {
+                    if (!id.startsWith("read:")) return;
+                    String[] p = id.split(":");
+                    final int seg = Integer.parseInt(p[1]);
+                    final int base = Integer.parseInt(p[2]);
+                    runOnUiThread(() -> showWordRange(seg, base, base + 1));
+                }
+                @Override public void onDone(String id) {
+                    if (id.equals(readLastId)) {
+                        reading = false;
+                        resumeChar = -1;
+                    }
+                }
+                @Override public void onError(String id) {
+                    reading = false;
+                }
+                @Override public void onRangeStart(String id, int start, int end, int frame) {
+                    if (!id.startsWith("read:")) return;
+                    String[] p = id.split(":");
+                    final int seg = Integer.parseInt(p[1]);
+                    final int base = Integer.parseInt(p[2]);
+                    resumeChar = base + start;
+                    runOnUiThread(() -> showWordRange(seg, base + start, base + end));
+                }
+            });
+            final Runnable p = voicePending;
+            voicePending = null;
+            if (p != null) runOnUiThread(p);
+        });
+    }
+
+    // Speaks sentences from index 'first' as soon as they are ready (only if the setting is on and nothing else is playing)
+    private void readAloudNew(final int first) {
+        if (!sp.getBoolean("readAloud", false)) return;
+        if (reading || (player != null && player.isPlaying())) return;
+        ensureVoice(() -> {
+            applyVoiceLocale();
+            for (int i = first; i < partTexts.size(); i++) {
+                voice.speak(partTexts.get(i), android.speech.tts.TextToSpeech.QUEUE_ADD, null, "live:" + i);
+            }
+        });
+    }
+
+    // Reads the transcript aloud starting at the tapped word
+    private void readFrom(final int absChar) {
+        ensureVoice(() -> {
+            applyVoiceLocale();
+            if (player != null && player.isPlaying()) player.pause();
+            voice.stop();
+            android.text.Editable ed = tvResult.getText();
+            int idx = -1;
+            for (int i = 0; i < partMarks.size(); i++) {
+                if (segStart(i) >= 0 && segStart(i) <= absChar) idx = i;
+            }
+            if (idx < 0) return;
+            reading = true;
+            for (int i = idx; i < partMarks.size(); i++) {
+                int s = segStart(i);
+                int e = ed.getSpanEnd(partMarks.get(i));
+                if (s < 0 || e <= s) continue;
+                int from = s;
+                if (i == idx) {
+                    from = Math.max(s, Math.min(absChar, e - 1));
+                    while (from > s && ed.charAt(from - 1) != ' ') from--;
+                }
+                readLastId = "read:" + i + ":" + from;
+                voice.speak(ed.subSequence(from, e).toString(), android.speech.tts.TextToSpeech.QUEUE_ADD, null, readLastId);
+            }
+        });
+    }
+
+    private void toggleReading() {
+        if (reading) {
+            stopReading();
+            return;
+        }
+        int from = resumeChar >= 0 ? resumeChar : (partMarks.isEmpty() ? -1 : segStart(0));
+        if (from < 0) {
+            Toast.makeText(this, "Nothing to read yet", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        readFrom(from);
+    }
+
+    private void stopReading() {
+        if (voice != null) voice.stop();
+        reading = false;
+    }
+
+    private void showWordRange(int seg, int a, int b) {
+        if (seg < 0 || seg >= partMarks.size()) return;
+        android.text.Editable text = tvResult.getText();
+        int s = segStart(seg);
+        int e = text.getSpanEnd(partMarks.get(seg));
+        if (s < 0 || e <= s) return;
+        a = Math.max(s, Math.min(a, e - 1));
+        while (a > s && text.charAt(a - 1) != ' ') a--;
+        b = Math.max(a + 1, Math.min(b, e));
+        while (b < e && text.charAt(b) != ' ') b++;
+        if (hiSeg == null) {
+            hiSeg = new android.text.style.BackgroundColorSpan(androidx.core.content.ContextCompat.getColor(this, R.color.accentSoft));
+            hiWord = new android.text.style.BackgroundColorSpan(androidx.core.content.ContextCompat.getColor(this, R.color.colorAccentDark));
+            hiWordText = new android.text.style.ForegroundColorSpan(0xFFFFFFFF);
+        }
+        text.setSpan(hiSeg, s, e, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        text.setSpan(hiWord, a, b, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        text.setSpan(hiWordText, a, b, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        if (seg != lastSegShown) {
+            lastSegShown = seg;
+            scrollToOffset(s);
+        }
+    }
+
+    // Time (ms) of the tapped word, estimated from its place in the sentence; starts 0.3 s early so the word is not missed
+    private int wordStartMs(int idx, int offset, int start, int end) {
+        android.text.Editable ed = tvResult.getText();
+        int s = segStart(idx);
+        int e = ed.getSpanEnd(partMarks.get(idx));
+        if (s < 0 || e <= s) return start;
+        int w = Math.max(s, Math.min(offset, e - 1));
+        while (w > s && ed.charAt(w - 1) != ' ') w--;
+        float frac = (w - s) / (float) (e - s);
+        int at = start + (int) ((end - start) * frac);
+        return Math.max(start, at - 300);
     }
 
     private void startProcessing(Whisper.Action action) {
