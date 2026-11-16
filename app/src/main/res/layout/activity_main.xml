@@ -121,46 +121,6 @@
                 android:textSize="16sp"
                 android:layout_marginStart="8dp" />
         </LinearLayout>
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:gravity="start">
-            <TextView
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:gravity="center_vertical"
-                android:textSize="16sp"
-                android:textColor="@color/colorAccent"
-                android:text="Read aloud while transcribing" />
-            <CheckBox
-                android:id="@+id/chk_readaloud"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:minWidth="0dp"
-                android:minHeight="0dp"
-                android:contentDescription="Read aloud while transcribing" />
-        </LinearLayout>
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:textSize="16sp"
-                android:textColor="@color/colorAccent"
-                android:text="Listen with" />
-            <Spinner
-                android:id="@+id/spnrVoiceSource"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginStart="10dp" />
-        </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
