@@ -412,7 +412,7 @@ public class MainActivity extends AppCompatActivity {
                 }
                 runOnUiThread(() -> spinnerTflite.setEnabled(true));
                 if (modeTTS.isChecked()){
-                    /* spoken by readAloudNew instead */
+                    /* reading aloud is done by the Listen with option */
                 }
             }
         });
@@ -552,7 +552,7 @@ public class MainActivity extends AppCompatActivity {
                     final int[] spn = com.whispertflite.utils.AudioDecoder.speechSpanMs(pcm, from, to);
                     final int[] pz = com.whispertflite.utils.AudioDecoder.pauseCentersMs(pcm, from, to);
                     final int startPause = (from > 0) ? com.whispertflite.utils.AudioDecoder.quietRunMs(pcm, from) : 99999;
-                    runOnUiThread(() -> { int before = partMs.size(); finishChunk(chunkStart[0], spn[0], spn[1], pz); readAloudNew(before); joinAcrossBoundary(before, startPause); });
+                    runOnUiThread(() -> { int before = partMs.size(); finishChunk(chunkStart[0], spn[0], spn[1], pz); joinAcrossBoundary(before, startPause); });
                 }
                 runOnUiThread(() -> tvStatus.setText("Chunks [start/total:new text] " + dbgLens + "\nFinished in " + ((System.currentTimeMillis() - fileJobStartedAt) / 1000) + " s, " + tvResult.getText().length() + " characters" + (failedParts[0] > 0 ? ", " + failedParts[0] + " part(s) failed" : "")));
                 runOnUiThread(() -> scoreAgainstReference(true));
@@ -1540,9 +1540,6 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void setupVoice() {
-        final android.widget.CheckBox cb = findViewById(R.id.chk_readaloud);
-        cb.setChecked(sp.getBoolean("readAloud", false));
-        cb.setOnCheckedChangeListener((b, on) -> sp.edit().putBoolean("readAloud", on).apply());
         final android.widget.Spinner s = findViewById(R.id.spnrVoiceSource);
         android.widget.ArrayAdapter<String> a = new android.widget.ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
                 new String[]{"Original recording", "Computer voice"});
@@ -1616,17 +1613,6 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    // Speaks sentences from index 'first' as soon as they are ready (only if the setting is on and nothing else is playing)
-    private void readAloudNew(final int first) {
-        if (!sp.getBoolean("readAloud", false)) return;
-        if (reading || (player != null && player.isPlaying())) return;
-        ensureVoice(() -> {
-            applyVoiceLocale();
-            for (int i = first; i < partTexts.size(); i++) {
-                voice.speak(partTexts.get(i), android.speech.tts.TextToSpeech.QUEUE_ADD, null, "live:" + i);
-            }
-        });
-    }
 
     // Reads the transcript aloud starting at the tapped word
     private void readFrom(final int absChar) {
