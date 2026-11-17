@@ -300,6 +300,7 @@ public class MainActivity extends AppCompatActivity {
         setupSpelling();
         setupBench();
         setupVoice();
+        setupSpeakers();
         tvResult.setOnClickListener(view -> tvResult.setCursorVisible(true));
         getOnBackPressedDispatcher().addCallback(new OnBackPressedCallback(true) {
             @Override
@@ -528,7 +529,7 @@ public class MainActivity extends AppCompatActivity {
         fileJobRunning = true;
         currentAudioKey = audioKey(uri);
         fileJobStartedAt = System.currentTimeMillis();
-        partChars.clear(); dbgLens.setLength(0); partMarks.clear(); partEndMs.clear(); partTexts.clear(); clearHighlight(tvResult.getText());
+        partChars.clear(); dbgLens.setLength(0); partMarks.clear(); headMarks.clear(); partEndMs.clear(); partTexts.clear(); clearHighlight(tvResult.getText());
         partMs.clear();
         if (!append.isChecked()) tvResult.setText("");
         tvStatus.setText("Decoding audio...");
@@ -554,6 +555,7 @@ public class MainActivity extends AppCompatActivity {
                     final int startPause = (from > 0) ? com.whispertflite.utils.AudioDecoder.quietRunMs(pcm, from) : 99999;
                     runOnUiThread(() -> { int before = partMs.size(); finishChunk(chunkStart[0], spn[0], spn[1], pz); joinAcrossBoundary(before, startPause); });
                 }
+                runSpeakerStep(pcm);
                 runOnUiThread(() -> tvStatus.setText("Chunks [start/total:new text] " + dbgLens + "\nFinished in " + ((System.currentTimeMillis() - fileJobStartedAt) / 1000) + " s, " + tvResult.getText().length() + " characters" + (failedParts[0] > 0 ? ", " + failedParts[0] + " part(s) failed" : "")));
                 runOnUiThread(() -> scoreAgainstReference(true));
             } catch (Exception e) {
@@ -679,6 +681,8 @@ public class MainActivity extends AppCompatActivity {
         android.widget.CheckBox jump = findViewById(R.id.chk_tap_jump);
         if (!jump.isChecked() || player == null || partMarks.isEmpty()) return false;
         int offset = tvResult.getOffsetForPosition(e.getX(), e.getY());
+        int hEnd = headingEnd(offset);
+        if (hEnd >= 0) offset = hEnd;
         int idx = -1;
         for (int i = 0; i < partMarks.size(); i++) if (segStart(i) >= 0 && segStart(i) <= offset) idx = i;
         if (idx < 0) return false;
@@ -1000,7 +1004,7 @@ public class MainActivity extends AppCompatActivity {
 
     private byte[] buildExport(String kind) throws java.io.IOException {
         java.util.ArrayList<String> lines = new java.util.ArrayList<>();
-        for (String s : tvResult.getText().toString().split("\n")) if (!s.trim().isEmpty()) lines.add(s.trim());
+        lines.addAll(currentSentenceTexts());
         boolean timed = !partTexts.isEmpty();
         boolean useEdited = timed && lines.size() == partTexts.size();
         java.util.ArrayList<String> texts = new java.util.ArrayList<>();
@@ -1023,6 +1027,12 @@ public class MainActivity extends AppCompatActivity {
             }
         } else {
             java.util.ArrayList<String> out = new java.util.ArrayList<>();
+            if (!headMarks.isEmpty()) {
+                for (String ln : tvResult.getText().toString().split("\n")) out.add(stamps ? ln : ln.replaceAll("^(Speaker \\d+) \\[[^\\]]*\\]$", "$1"));
+                if (kind.equals("docx")) return buildDocx(out);
+                for (String s : out) sb.append(s).append("\n");
+                return sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            }
             if (timed && useEdited) {
                 for (int i = 0; i < texts.size(); i++) out.add((stamps ? "[" + shortTime(partMs.get(i)) + "] " : "") + texts.get(i));
             } else {
@@ -1118,7 +1128,7 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         java.util.ArrayList<String> a = wordTokens(String.join(" ", partTexts));
-        java.util.ArrayList<String> b = wordTokens(tvResult.getText().toString());
+        java.util.ArrayList<String> b = wordTokens(String.join(" ", currentSentenceTexts()));
         final int n = a.size();
         final int m = b.size();
         if (m == 0) return;
@@ -1310,7 +1320,7 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "Transcribe an audio file first", Toast.LENGTH_LONG).show();
             return;
         }
-        sp.edit().putString("ref_" + currentAudioKey, tvResult.getText().toString()).apply();
+        sp.edit().putString("ref_" + currentAudioKey, String.join("\n", currentSentenceTexts())).apply();
         Toast.makeText(this, "Saved. Every later run of this recording is scored automatically.", Toast.LENGTH_LONG).show();
     }
 
@@ -1335,7 +1345,7 @@ public class MainActivity extends AppCompatActivity {
     private void scoreAgainstReference(boolean auto) {
         String ref = sp.getString("ref_" + currentAudioKey, null);
         if (ref == null) return;
-        int[] r = wordErrors(ref, tvResult.getText().toString());
+        int[] r = wordErrors(ref, String.join("\n", currentSentenceTexts()));
         if (r[0] < 0 || r[1] == 0) return;
         int pct = Math.max(0, (int) Math.round(100.0 * (r[1] - r[0]) / r[1]));
         String modelName = String.valueOf(spinnerTflite.getSelectedItem());
@@ -1695,6 +1705,182 @@ public class MainActivity extends AppCompatActivity {
         float frac = (w - s) / (float) (e - s);
         int at = start + (int) ((end - start) * frac);
         return Math.max(start, at - 300);
+    }
+
+
+    private final java.util.ArrayList<Object> headMarks = new java.util.ArrayList<>();
+
+    private void setupSpeakers() {
+        final android.widget.CheckBox cb = findViewById(R.id.chk_speakers);
+        cb.setChecked(sp.getBoolean("findSpeakers", true));
+        cb.setOnCheckedChangeListener((b, on) -> sp.edit().putBoolean("findSpeakers", on).apply());
+        final android.widget.Spinner s = findViewById(R.id.spnrSpeakerCount);
+        android.widget.ArrayAdapter<String> a = new android.widget.ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
+                new String[]{"Not sure", "1 person", "2 people", "3 people", "4 people", "5 people", "6 people"});
+        a.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        s.setAdapter(a);
+        s.setSelection(sp.getInt("speakerCount", 0), false);
+        s.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> p, View v, int pos, long id) {
+                sp.edit().putInt("speakerCount", pos).apply();
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> p) {}
+        });
+    }
+
+    private java.io.File fetchSpeakerFile(String fileName) throws java.io.IOException {
+        java.io.File dir = getExternalFilesDir(null);
+        java.io.File f = new java.io.File(dir, fileName);
+        if (f.exists() && f.length() > 1000000) return f;
+        java.io.File part = new java.io.File(dir, fileName + ".part");
+        java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(
+                "https://huggingface.co/Sammykwena/whisper_tflite_models/resolve/main/" + fileName.replace("+", "%2B")).openConnection();
+        c.setConnectTimeout(20000);
+        c.setReadTimeout(30000);
+        c.connect();
+        if (c.getResponseCode() != 200) throw new java.io.IOException("Download failed: HTTP " + c.getResponseCode());
+        long total = c.getContentLengthLong();
+        long done = 0;
+        long lastUi = 0;
+        try (java.io.InputStream in = c.getInputStream(); java.io.FileOutputStream out = new java.io.FileOutputStream(part)) {
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+                done += n;
+                long now = System.currentTimeMillis();
+                if (now - lastUi > 500) {
+                    lastUi = now;
+                    final String msg = total > 0 ? (done * 100 / total) + "%" : (done / 1048576) + " MB";
+                    runOnUiThread(() -> tvStatus.setText("Getting the speaker files (once only): " + msg));
+                }
+            }
+        }
+        if (total > 0 && done != total) throw new java.io.IOException("Download incomplete, try again");
+        if (!part.renameTo(f)) throw new java.io.IOException("Could not save the file");
+        return f;
+    }
+
+    private float[] pcmToFloats(byte[] pcm) {
+        int n = pcm.length / 2;
+        float[] out = new float[n];
+        for (int i = 0; i < n; i++) out[i] = (short) ((pcm[2 * i] & 0xff) | (pcm[2 * i + 1] << 8)) / 32768f;
+        return out;
+    }
+
+    // Runs on the worker thread after the last part is transcribed
+    private void runSpeakerStep(byte[] pcm) {
+        if (!sp.getBoolean("findSpeakers", true)) return;
+        int pick = sp.getInt("speakerCount", 0);
+        final int totalMs = (int) (pcm.length / 32L);
+        if (pick == 1) {
+            final int[][] one = {{0, totalMs, 0}};
+            runOnUiThread(() -> applySpeakers(one));
+            return;
+        }
+        try {
+            runOnUiThread(() -> tvStatus.setText("Getting the speaker files (once only)..."));
+            java.io.File seg = fetchSpeakerFile("pyannote-segmentation-3-0.onnx");
+            java.io.File voiceModel = fetchSpeakerFile("wespeaker_en_voxceleb_CAM++.onnx");
+            runOnUiThread(() -> tvStatus.setText("Finding who is speaking..."));
+            float[] samples = pcmToFloats(pcm);
+            final int[][] rows = com.whispertflite.speakers.SpeakerFinder.find(seg.getAbsolutePath(), voiceModel.getAbsolutePath(), samples, pick >= 2 ? pick : -1);
+            runOnUiThread(() -> applySpeakers(rows));
+        } catch (Throwable e) {
+            Log.e(TAG, "speaker step failed", e);
+            final String msg = (e instanceof OutOfMemoryError) ? "out of memory" : String.valueOf(e.getMessage());
+            runOnUiThread(() -> Toast.makeText(this, "Speaker labels didn't work this time: " + msg, Toast.LENGTH_LONG).show());
+        }
+    }
+
+    // Matches each sentence to the speaker who talks most during it, then groups neighbours into turns with a bold heading
+    private void applySpeakers(int[][] rows) {
+        int n = partMarks.size();
+        if (n == 0 || rows == null || rows.length == 0) return;
+        int[] who = new int[n];
+        java.util.HashMap<Integer, Integer> label = new java.util.HashMap<>();
+        for (int i = 0; i < n; i++) {
+            int a = partMs.get(i);
+            int b = Math.max(partEndMs.get(i), a + 1);
+            java.util.HashMap<Integer, Long> ov = new java.util.HashMap<>();
+            for (int[] r : rows) {
+                long o = Math.min(b, r[1]) - Math.max(a, r[0]);
+                if (o > 0) ov.put(r[2], (ov.containsKey(r[2]) ? ov.get(r[2]) : 0L) + o);
+            }
+            long best = 0;
+            int bestSp = -1;
+            for (java.util.Map.Entry<Integer, Long> en : ov.entrySet()) {
+                if (en.getValue() > best) {
+                    best = en.getValue();
+                    bestSp = en.getKey();
+                }
+            }
+            if (bestSp < 0) {
+                long bd = Long.MAX_VALUE;
+                int mid = (a + b) / 2;
+                for (int[] r : rows) {
+                    long d = mid < r[0] ? r[0] - mid : (mid > r[1] ? mid - r[1] : 0);
+                    if (d < bd) {
+                        bd = d;
+                        bestSp = r[2];
+                    }
+                }
+            }
+            if (!label.containsKey(bestSp)) label.put(bestSp, label.size() + 1);
+            who[i] = label.get(bestSp);
+        }
+        java.util.ArrayList<int[]> turns = new java.util.ArrayList<>();
+        int t0 = 0;
+        for (int i = 1; i <= n; i++) {
+            if (i == n || who[i] != who[t0]) {
+                turns.add(new int[]{t0, i - 1, who[t0]});
+                t0 = i;
+            }
+        }
+        android.text.Editable ed = tvResult.getText();
+        for (int k = turns.size() - 1; k >= 0; k--) {
+            int[] t = turns.get(k);
+            for (int i = t[0]; i < t[1]; i++) {
+                int e = ed.getSpanEnd(partMarks.get(i));
+                if (e >= 0 && e < ed.length() && ed.charAt(e) == '\n') ed.replace(e, e + 1, " ");
+            }
+            int s = segStart(t[0]);
+            if (s < 0) continue;
+            String head = turnHeading(t[2], partMs.get(t[0]), partEndMs.get(t[1]));
+            ed.insert(s, (k > 0 ? "\n" : "") + head + "\n");
+            int hs = s + (k > 0 ? 1 : 0);
+            Object hm = new Object();
+            ed.setSpan(hm, hs, hs + head.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            ed.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD), hs, hs + head.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            headMarks.add(hm);
+        }
+    }
+
+    // The sentences as they are now (edits included), without speaker headings
+    private java.util.ArrayList<String> currentSentenceTexts() {
+        java.util.ArrayList<String> out = new java.util.ArrayList<>();
+        android.text.Editable ed = tvResult.getText();
+        if (partMarks.isEmpty() || partMarks.size() != partTexts.size()) {
+            for (String s : ed.toString().split("\n")) if (!s.trim().isEmpty()) out.add(s.trim());
+            return out;
+        }
+        for (int i = 0; i < partMarks.size(); i++) {
+            int s = ed.getSpanStart(partMarks.get(i));
+            int e = ed.getSpanEnd(partMarks.get(i));
+            out.add(s >= 0 && e > s ? ed.subSequence(s, e).toString().trim() : partTexts.get(i));
+        }
+        return out;
+    }
+
+    // If 'offset' lies in a speaker heading, returns where that turn's text begins; otherwise -1
+    private int headingEnd(int offset) {
+        android.text.Editable ed = tvResult.getText();
+        for (Object h : headMarks) {
+            int hs = ed.getSpanStart(h);
+            int he = ed.getSpanEnd(h);
+            if (hs >= 0 && offset >= hs && offset <= he + 1) return Math.min(ed.length(), he + 1);
+        }
+        return -1;
     }
 
     private void startProcessing(Whisper.Action action) {

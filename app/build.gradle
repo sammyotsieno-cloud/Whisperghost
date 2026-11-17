@@ -15,8 +15,8 @@ android {
         applicationId "com.sammyotsieno.whisperghost"
         minSdk 28
         targetSdk 35
-        versionCode 51
-        versionName "5.1-voice"
+        versionCode 52
+        versionName "5.2-speakers"
 
     }
 
@@ -40,7 +40,7 @@ android {
             signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             ndk {
-                abiFilters "arm64-v8a", "armeabi-v7a"
+                abiFilters "arm64-v8a"
             }
         }
     }
@@ -76,6 +76,7 @@ dependencies {
     //implementation 'com.google.ai.edge.litert:litert:1.2.0'
     //implementation 'com.google.ai.edge.litert:litert-support:1.2.0'
     implementation 'org.tensorflow:tensorflow-lite:2.17.0'
+    implementation files('libs/sherpa-onnx-2.0.1.aar')
     implementation 'org.tensorflow:tensorflow-lite-support:0.5.0'
     implementation 'com.github.gkonovalov.android-vad:webrtc:2.0.10'
     implementation 'com.github.houbb:opencc4j:1.14.0'

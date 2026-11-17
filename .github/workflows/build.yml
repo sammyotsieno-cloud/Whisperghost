@@ -16,6 +16,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.14.5
+      - name: Fetch speaker engine
+        run: |
+          mkdir -p app/libs
+          curl -fL -o app/libs/sherpa-onnx-2.0.1.aar https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/sherpa-onnx-2.0.1.aar
       - name: Build
         run: |
           rm -f local.properties
