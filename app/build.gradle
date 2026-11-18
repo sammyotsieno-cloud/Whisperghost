@@ -15,8 +15,8 @@ android {
         applicationId "com.sammyotsieno.whisperghost"
         minSdk 28
         targetSdk 35
-        versionCode 52
-        versionName "5.2-speakers"
+        versionCode 53
+        versionName "5.3-ui"
 
     }
 

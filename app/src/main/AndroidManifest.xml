@@ -99,5 +99,6 @@
             </intent-filter>
         </activity>
 
+            <activity android:name=".StatsActivity" android:exported="false" android:theme="@style/Theme.Whisper.NoActionBar" />
     </application>
 </manifest>

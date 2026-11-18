@@ -390,7 +390,7 @@ public class MainActivity extends AppCompatActivity {
                 if (message.contains("not initialized") || message.contains("failed") || message.contains("Failed")) runOnUiThread(() -> Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show());
 
                 if (message.equals(Whisper.MSG_PROCESSING)) {
-                    runOnUiThread(() -> tvStatus.setText(getString(R.string.processing)));
+                    if (!fileJobRunning) runOnUiThread(() -> tvStatus.setText(getString(R.string.processing)));
                     startTime = System.currentTimeMillis();
                     runOnUiThread(() -> spinnerTflite.setEnabled(false));
                 }
@@ -399,7 +399,7 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onResultReceived(WhisperResult whisperResult) {
                 long timeTaken = System.currentTimeMillis() - startTime;
-                runOnUiThread(() -> tvStatus.setText(getString(R.string.processing_done) + timeTaken + "\u2009ms" + "\n"+ getString(R.string.language) + " " + new Locale(whisperResult.getLanguage()).getDisplayLanguage() + " " + (whisperResult.getTask() == Whisper.Action.TRANSCRIBE ? getString(R.string.mode_transcription) : getString(R.string.mode_translation))));
+                if (!fileJobRunning) runOnUiThread(() -> tvStatus.setText(getString(R.string.processing_done) + timeTaken + "\u2009ms" + "\n"+ getString(R.string.language) + " " + new Locale(whisperResult.getLanguage()).getDisplayLanguage() + " " + (whisperResult.getTask() == Whisper.Action.TRANSCRIBE ? getString(R.string.mode_transcription) : getString(R.string.mode_translation))));
                 runOnUiThread(() -> processingBar.setIndeterminate(false));
                 Log.d(TAG, "Result: " + whisperResult.getResult() + " " + whisperResult.getLanguage() + " " + (whisperResult.getTask() == Whisper.Action.TRANSCRIBE ? "transcribing" : "translating"));
                 if ((whisperResult.getLanguage().equals("zh")) && (whisperResult.getTask() == Whisper.Action.TRANSCRIBE)){
@@ -528,14 +528,17 @@ public class MainActivity extends AppCompatActivity {
         }
         fileJobRunning = true;
         currentAudioKey = audioKey(uri);
+        statsBegin();
         fileJobStartedAt = System.currentTimeMillis();
         partChars.clear(); dbgLens.setLength(0); partMarks.clear(); headMarks.clear(); partEndMs.clear(); partTexts.clear(); clearHighlight(tvResult.getText());
         partMs.clear();
         if (!append.isChecked()) tvResult.setText("");
-        tvStatus.setText("Decoding audio...");
+        tvStatus.setText("Getting your recording ready...");
         new Thread(() -> {
             try {
                 byte[] pcm = com.whispertflite.utils.AudioDecoder.decode(this, uri);
+                Stats.set("Audio length", niceDuration(pcm.length / 32000L));
+                Stats.log("Recording decoded: " + niceDuration(pcm.length / 32000L));
                 java.util.List<Integer> cuts = com.whispertflite.utils.AudioDecoder.silenceCuts(pcm);
                 int total = cuts.size() - 1;
                 final int[] chunkStart = new int[1];
@@ -546,9 +549,11 @@ public class MainActivity extends AppCompatActivity {
                     com.whispertflite.asr.RecordBuffer.setOutputBuffer(java.util.Arrays.copyOfRange(pcm, from, to));
                     final int part = i + 1;
                     final int startMs = from / 32;
-                    runOnUiThread(() -> { tvStatus.setText("Part " + part + " of " + total); chunkStart[0] = tvResult.length(); });
+                    runOnUiThread(() -> { tvStatus.setText("Transcribing: part " + part + " of " + total); chunkStart[0] = tvResult.length(); });
+                    final long t0c = System.currentTimeMillis();
                     startProcessing(translate.isChecked() ? Whisper.ACTION_TRANSLATE : Whisper.ACTION_TRANSCRIBE);
                     while (mWhisper != null && mWhisper.isInProgress()) Thread.sleep(200);
+                    Stats.log("Part " + part + " of " + total + ": " + ((System.currentTimeMillis() - t0c) / 1000.0) + " s" + (com.whispertflite.engine.WhisperEngineJava.lastError != null ? "  FAILED: " + com.whispertflite.engine.WhisperEngineJava.lastError : ""));
                     if (com.whispertflite.engine.WhisperEngineJava.lastError != null) failedParts[0]++;
                     final int[] spn = com.whispertflite.utils.AudioDecoder.speechSpanMs(pcm, from, to);
                     final int[] pz = com.whispertflite.utils.AudioDecoder.pauseCentersMs(pcm, from, to);
@@ -556,10 +561,11 @@ public class MainActivity extends AppCompatActivity {
                     runOnUiThread(() -> { int before = partMs.size(); finishChunk(chunkStart[0], spn[0], spn[1], pz); joinAcrossBoundary(before, startPause); });
                 }
                 runSpeakerStep(pcm);
-                runOnUiThread(() -> tvStatus.setText("Chunks [start/total:new text] " + dbgLens + "\nFinished in " + ((System.currentTimeMillis() - fileJobStartedAt) / 1000) + " s, " + tvResult.getText().length() + " characters" + (failedParts[0] > 0 ? ", " + failedParts[0] + " part(s) failed" : "")));
+                runOnUiThread(() -> finishUp(failedParts[0]));
                 runOnUiThread(() -> scoreAgainstReference(true));
             } catch (Exception e) {
                 Log.e(TAG, "File transcription failed", e);
+                Stats.log("FAILED: " + e);
                 runOnUiThread(() -> tvStatus.setText("Failed: " + e.getMessage()));
             } finally {
                 fileJobRunning = false;
@@ -716,9 +722,11 @@ public class MainActivity extends AppCompatActivity {
         toggle.setOnClickListener(v -> {
             boolean show = card.getVisibility() != View.VISIBLE;
             card.setVisibility(show ? View.VISIBLE : View.GONE);
-            toggle.setText(show ? "Settings  \u25B2" : "Settings  \u25BC");
         });
         final TextView mini = findViewById(R.id.tvStatusMini);
+        mini.setOnClickListener(v -> startActivity(new android.content.Intent(MainActivity.this, StatsActivity.class)));
+        findViewById(R.id.btnStats).setOnClickListener(v -> startActivity(new android.content.Intent(MainActivity.this, StatsActivity.class)));
+        findViewById(R.id.btnCloseSettings).setOnClickListener(v -> toggle.performClick());
         mini.setText(tvStatus.getText());
         tvStatus.addTextChangedListener(new android.text.TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
@@ -1770,7 +1778,7 @@ public class MainActivity extends AppCompatActivity {
 
     // Runs on the worker thread after the last part is transcribed
     private void runSpeakerStep(byte[] pcm) {
-        if (!sp.getBoolean("findSpeakers", true)) return;
+        if (!sp.getBoolean("findSpeakers", true)) { Stats.log("Speaker step is switched off"); final int[][] off = {{0, (int) (pcm.length / 32L), 0}}; runOnUiThread(() -> applySpeakers(off)); return; }
         int pick = sp.getInt("speakerCount", 0);
         final int totalMs = (int) (pcm.length / 32L);
         if (pick == 1) {
@@ -1780,14 +1788,23 @@ public class MainActivity extends AppCompatActivity {
         }
         try {
             runOnUiThread(() -> tvStatus.setText("Getting the speaker files (once only)..."));
+            Stats.log("Speaker files: checking or downloading");
             java.io.File seg = fetchSpeakerFile("pyannote-segmentation-3-0.onnx");
             java.io.File voiceModel = fetchSpeakerFile("wespeaker_en_voxceleb_CAM++.onnx");
             runOnUiThread(() -> tvStatus.setText("Finding who is speaking..."));
+            final long tSp0 = System.currentTimeMillis();
             float[] samples = pcmToFloats(pcm);
             final int[][] rows = com.whispertflite.speakers.SpeakerFinder.find(seg.getAbsolutePath(), voiceModel.getAbsolutePath(), samples, pick >= 2 ? pick : -1);
+            int maxSp = -1;
+            for (int[] r0 : rows) maxSp = Math.max(maxSp, r0[2]);
+            Stats.set("Speakers found", String.valueOf(maxSp + 1));
+            Stats.log("Speaker analysis: " + ((System.currentTimeMillis() - tSp0) / 1000.0) + " s, " + rows.length + " stretches of speech");
             runOnUiThread(() -> applySpeakers(rows));
         } catch (Throwable e) {
             Log.e(TAG, "speaker step failed", e);
+            Stats.log("Speaker step FAILED: " + e);
+            final int[][] fb = {{0, totalMs, 0}};
+            runOnUiThread(() -> applySpeakers(fb));
             final String msg = (e instanceof OutOfMemoryError) ? "out of memory" : String.valueOf(e.getMessage());
             runOnUiThread(() -> Toast.makeText(this, "Speaker labels didn't work this time: " + msg, Toast.LENGTH_LONG).show());
         }
@@ -1832,7 +1849,7 @@ public class MainActivity extends AppCompatActivity {
         java.util.ArrayList<int[]> turns = new java.util.ArrayList<>();
         int t0 = 0;
         for (int i = 1; i <= n; i++) {
-            if (i == n || who[i] != who[t0]) {
+            if (i == n || who[i] != who[t0] || partEndMs.get(i) - partMs.get(t0) > 90000) {
                 turns.add(new int[]{t0, i - 1, who[t0]});
                 t0 = i;
             }
@@ -1881,6 +1898,51 @@ public class MainActivity extends AppCompatActivity {
             if (hs >= 0 && offset >= hs && offset <= he + 1) return Math.min(ed.length(), he + 1);
         }
         return -1;
+    }
+
+
+    private String niceDuration(long s) {
+        if (s >= 3600) return (s / 3600) + " h " + ((s / 60) % 60) + " min";
+        if (s >= 60) return (s / 60) + " min " + (s % 60) + " s";
+        return s + " s";
+    }
+
+    private String modelLabel() {
+        try {
+            return ((TextView) spinnerTflite.getSelectedView().findViewById(android.R.id.text1)).getText().toString();
+        } catch (Exception e) {
+            String m = String.valueOf(spinnerTflite.getSelectedItem());
+            return m.substring(m.lastIndexOf('/') + 1);
+        }
+    }
+
+    private void statsBegin() {
+        Stats.begin(currentAudioKey.replace("|", ", "));
+        Stats.set("Build", BuildConfig.VERSION_NAME + " (code " + BuildConfig.VERSION_CODE + ")");
+        Stats.set("Phone", android.os.Build.MODEL + ", Android " + android.os.Build.VERSION.RELEASE);
+        Stats.set("Quality (model)", modelLabel());
+        Stats.set("Translate to English", translate.isChecked() ? "on" : "off");
+        Stats.set("English spelling", new String[]{"as transcribed", "British", "American"}[Math.max(0, Math.min(2, sp.getInt("spelling", 0)))]);
+        Stats.set("Find speakers", sp.getBoolean("findSpeakers", true) ? "on" : "off");
+        Stats.set("People expected", sp.getInt("speakerCount", 0) == 0 ? "not sure" : String.valueOf(sp.getInt("speakerCount", 0)));
+        Stats.set("Listen with", sp.getInt("voiceMode", 0) == 0 ? "original recording" : "computer voice");
+        Stats.set("Audio preparation test", sp.getInt("frontend", 0) == 1 ? "on" : "off");
+        Stats.set("Threads", com.whispertflite.engine.WhisperEngineJava.NUM_THREADS == 0 ? "auto" : String.valueOf(com.whispertflite.engine.WhisperEngineJava.NUM_THREADS));
+    }
+
+    // Runs on the UI thread when everything, speakers included, is finished
+    private void finishUp(int failedParts) {
+        long secs = (System.currentTimeMillis() - fileJobStartedAt) / 1000;
+        String msg = "Done in " + niceDuration(secs) + ".  " + partTexts.size() + " sentences.";
+        if (failedParts > 0) msg += "  " + failedParts + " part(s) didn't come through. Details are under Statistics.";
+        tvStatus.setText(msg);
+        Stats.set("Total time", niceDuration(secs));
+        Stats.set("Sentences", String.valueOf(partTexts.size()));
+        Stats.set("Characters", String.valueOf(tvResult.getText().length()));
+        Stats.set("Parts that failed", String.valueOf(failedParts));
+        Stats.set("Parts [start/total:new text]", dbgLens.toString());
+        Stats.log("Finished");
+        sp.edit().putString("stats_last", Stats.report()).apply();
     }
 
     private void startProcessing(Whisper.Action action) {
